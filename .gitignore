@@ -1,0 +1,10 @@
+*.app/
+*.command
+*.exe
+*.import.bak
+*.pck
+*.zip
+.DS_Store
+.godot/
+_vecchi/
+build/
