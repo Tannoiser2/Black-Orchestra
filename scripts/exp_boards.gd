@@ -23,8 +23,8 @@ func setup(g: BOGame, k: String, width: float) -> void:
 	tooltip_text = " "
 	match kind:
 		"or":
-			sc = width / RES_SIZE.x
-			custom_minimum_size = Vector2(width, 275 + RES_SIZE.y * sc)
+			sc = 900.0 / RES_SIZE.x
+			custom_minimum_size = Vector2(_or_o.x + RES_SIZE.y * sc + 16 + 520 * sc * 1.4, RES_SIZE.x * sc)
 		"kk":
 			sc = width / IND_SIZE.x
 			custom_minimum_size = Vector2(width, IND_SIZE.y * sc + 190)
@@ -74,17 +74,27 @@ func _draw() -> void:
 			_draw_ck()
 
 # ---------------------------------------------------------------------
+## La plancia Resistenza è verticale: le coordinate sono misurate sulla scansione orizzontale
+## (1669×718) e ruotate di 90° in senso orario.
+var _or_o := Vector2(70, 0)
+
+func _rp(v: Vector2) -> Vector2:
+	return _or_o + Vector2(RES_SIZE.y - v.y, v.x) * sc
+
+func _rr(pos: Vector2, size: Vector2) -> Rect2:
+	var a := _rp(pos)
+	var c := _rp(pos + size)
+	return Rect2(Vector2(minf(a.x, c.x), minf(a.y, c.y)), (c - a).abs())
+
 func _draw_or() -> void:
 	var s: Dictionary = game.s
-	var o := Vector2(0, 275)
-	var b := func(v: Vector2) -> Vector2: return o + v * sc
-	# carte missione sopra le colonne colorate
+	var bsz := Vector2(RES_SIZE.y, RES_SIZE.x) * sc
+	draw_texture_rect(_tex("res://assets/res/boards/resistenza.jpg"), Rect2(_or_o, bsz), false)
+	# carte missione a fianco delle fasce colorate
 	for col in BOData.TEL_COLORS:
-		var x0: float = COL_X[col][0] * sc
-		var x1: float = COL_X[col][1] * sc
-		var w := x1 - x0
-		var h := w * 400.0 / 560.0
-		var r := Rect2(x0, 268 - h, w, h)
+		var y0: float = _or_o.y + COL_X[col][0] * sc
+		var h: float = (COL_X[col][1] - COL_X[col][0]) * sc
+		var r := Rect2(_or_o.x + bsz.x + 16, y0, h * 560.0 / 400.0, h)
 		var m: int = s.orr.act[col]
 		if m >= 0:
 			draw_rect(Rect2(r.position + Vector2(3, 4), r.size), Color(0, 0, 0, 0.5))
@@ -99,7 +109,6 @@ func _draw_or() -> void:
 			draw_rect(r, Color(1, 1, 1, 0.25), false, 1.5)
 			var f := UI.font("italic")
 			draw_multiline_string(f, r.position + Vector2(10, r.size.y / 2 - 10), "Nessuna missione %s:\ncolloca una telescrivente %s" % [BOData.TEL_NAMES[col], BOData.TEL_NAMES[col]], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 20, 16, -1, UI.MUTED)
-	draw_texture_rect(_tex("res://assets/res/boards/resistenza.jpg"), Rect2(o, RES_SIZE * sc), false)
 	# telescriventi ancora sulla plancia (nei due cerchi di ogni colore)
 	for col in BOData.TEL_COLORS:
 		var x0: float = COL_X[col][0]
@@ -108,36 +117,36 @@ func _draw_or() -> void:
 		var on_board: int = 2 - s.orr.sup[col]
 		for k in range(2):
 			if k >= on_board:
-				_circle_tok(b.call(circles[k]), 80 * sc, "res://assets/res/tokens/%s.png" % BOData.TEL_IMG[col])
-		hot.append([Rect2(b.call(Vector2(x0, 0)), Vector2(x1 - x0, 205) * sc), "Telescriventi %s: %d sulla plancia, %d sul tabellone.\nLa prima collocata rivela la missione, la seconda la protegge." % [BOData.TEL_NAMES[col], s.orr.sup[col], on_board], ""])
+				_circle_tok(_rp(circles[k]), 80 * sc, "res://assets/res/tokens/%s.png" % BOData.TEL_IMG[col])
+		hot.append([_rr(Vector2(x0, 0), Vector2(x1 - x0, 205)), "Telescriventi %s: %d sulla plancia, %d sul tabellone.\nLa prima collocata rivela la missione, la seconda la protegge." % [BOData.TEL_NAMES[col], s.orr.sup[col], on_board], ""])
 	# Prove
 	for k in range(s.orr.prove):
-		var rr := Rect2(b.call(Vector2(465, 245 + k * 190)), Vector2(150, 165) * sc)
-		draw_texture_rect(_tex("res://assets/items/PROVE.png"), rr, false)
-	hot.append([Rect2(b.call(Vector2(465, 245)), Vector2(150, 355) * sc), "Oggetti Prove disponibili: %d" % s.orr.prove, ""])
+		draw_texture_rect(_tex("res://assets/items/PROVE.png"), _rr(Vector2(465, 245 + k * 190), Vector2(150, 165)), false)
+	hot.append([_rr(Vector2(465, 245), Vector2(150, 355)), "Oggetti Prove disponibili: %d" % s.orr.prove, ""])
 	# telescrivente permanente e nascondiglio
 	if s.orr.perm == "" and not s.orr.done.has(_mission_index("reclutamento")):
-		_circle_tok(b.call(Vector2(793, 300)), 62 * sc, "res://assets/res/tokens/TEL_P.png")
+		_circle_tok(_rp(Vector2(793, 300)), 62 * sc, "res://assets/res/tokens/TEL_P.png")
 	if not s.orr.hideout_have:
-		_circle_tok(b.call(Vector2(793, 475)), 62 * sc, "res://assets/res/tokens/NASC.png")
+		_circle_tok(_rp(Vector2(793, 475)), 62 * sc, "res://assets/res/tokens/NASC.png")
 	elif s.orr.hideout != "":
-		hot.append([Rect2(b.call(Vector2(720, 400)), Vector2(150, 150) * sc), "Nascondiglio su: " + game.cardname(s.orr.hideout), ""])
+		hot.append([_rr(Vector2(720, 400), Vector2(150, 150)), "Nascondiglio su: " + game.cardname(s.orr.hideout), ""])
 	# volantini
 	for k in range(mini(s.orr.sup.V, 5)):
-		_circle_tok(b.call(VOL_POS[k]), 70 * sc, "res://assets/res/tokens/VOL.png")
+		_circle_tok(_rp(VOL_POS[k]), 70 * sc, "res://assets/res/tokens/VOL.png")
 	# combattenti
 	for k in range(s.orr.comb_sup):
-		draw_texture_rect(_tex("res://assets/items/COMB.png"), Rect2(b.call(Vector2(1495, 255 + k * 185)), Vector2(130, 145) * sc), false)
-	# mazzo, scarti, completate
-	_count_badge(b.call(Vector2(265, 690)), "%d carte" % s.orr.mdeck.size())
-	_count_badge(b.call(Vector2(836, 690)), "%d carte" % s.orr.mdisc.size())
+		draw_texture_rect(_tex("res://assets/items/COMB.png"), _rr(Vector2(1495, 255 + k * 185), Vector2(130, 145)), false)
+	# mazzo, scarti, completate (striscia a sinistra)
+	_count_badge(_rp(Vector2(265, 674)), "%d" % s.orr.mdeck.size())
+	hot.append([_rr(Vector2(20, 630), Vector2(490, 88)), "Mazzo missione: %d carte" % s.orr.mdeck.size(), ""])
+	_count_badge(_rp(Vector2(836, 674)), "%d" % s.orr.mdisc.size())
+	hot.append([_rr(Vector2(578, 630), Vector2(517, 88)), "Scarti missione: %d carte" % s.orr.mdisc.size(), ""])
 	var done: Array = s.orr.done
-	_count_badge(b.call(Vector2(1395, 690)), "%d  →  +%d dad%s ai complotti" % [done.size(), done.size(), "o" if done.size() == 1 else "i"])
-	if done.size() > 0:
-		var names: Array = []
-		for m in done:
-			names.append(BOData.MISSIONS[m].name)
-		hot.append([Rect2(b.call(Vector2(1150, 630)), Vector2(495, 88) * sc), "Missioni completate:\n" + "\n".join(names), ""])
+	_count_badge(_rp(Vector2(1395, 674)), "✔%d" % done.size())
+	var names: Array = []
+	for m in done:
+		names.append(BOData.MISSIONS[m].name)
+	hot.append([_rr(Vector2(1150, 630), Vector2(495, 88)), "Missioni completate: %d (+%d dadi ai complotti)%s" % [done.size(), done.size(), ("\n" + "\n".join(names)) if names.size() > 0 else ""], ""])
 
 func _mission_index(k: String) -> int:
 	for x in range(BOData.MISSIONS.size()):

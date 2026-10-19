@@ -1007,7 +1007,7 @@ func _show_exp_panel(which: String = "") -> void:
 	z.mouse_filter = Control.MOUSE_FILTER_STOP
 	modal_layer.add_child(z)
 	var dim := ColorRect.new()
-	dim.color = Color(0.05, 0.035, 0.03, 0.97)
+	dim.color = Color(0.05, 0.035, 0.03, 1.0)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	z.add_child(dim)
 	dim.gui_input.connect(func(e): if _click(e): z.queue_free())
@@ -1058,7 +1058,7 @@ func _show_exp_panel(which: String = "") -> void:
 				lines.append("Penalità ignorate fino al turno di " + game.cname(s.orr.no_pen))
 			if s.orr.dossier_bonus > 0:
 				lines.append("Limite di Dossier +%d" % s.orr.dossier_bonus)
-			lines.append("\nSopra ogni colonna c'è la missione attiva di quel colore: la prima telescrivente collocata sul tabellone la rivela, la seconda (cerchio a destra) impedisce che venga scartata.")
+			lines.append("\nA fianco di ogni fascia colorata c'è la missione attiva di quel colore: la prima telescrivente collocata sul tabellone la rivela, la seconda (secondo cerchio) impedisce che venga scartata.")
 		"kk":
 			side.add_child(UI.label("Horst Kopkow", 28, Color("d0a060"), "head"))
 			lines.append("Posizione: " + (game.spname(s.kk.pos) if s.kk.pos != "" else "non ancora in gioco"))
