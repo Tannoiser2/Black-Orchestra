@@ -5,8 +5,13 @@ class_name BOData
 const MOT_NAMES := ["Cauto", "Scettico", "Determinato", "Devoto", "Temerario"]
 const SUSP_NAMES := ["Basso", "Medio", "Alto", "Estremo"]
 const SUSP_EAGLES := [3, 2, 1, 1]   # numero di aquile che fanno fallire il complotto
+const BASE_ITEMS := ["CRED", "INFO", "VELENO", "MAPPA", "ARMI", "FIRMA", "CHIAVI", "ESPL"]
 const ITEM_NAMES := {"CRED": "Credenziali", "INFO": "Informazioni", "VELENO": "Veleno", "MAPPA": "Mappa",
-	"ARMI": "Armi", "FIRMA": "Firma", "CHIAVI": "Chiavi", "ESPL": "Esplosivi"}
+	"ARMI": "Armi", "FIRMA": "Firma", "CHIAVI": "Chiavi", "ESPL": "Esplosivi",
+	"PROVE": "Prove", "COMB": "Combattente della Resistenza", "ALLEATO": "Alleato", "RAIDT": "Raid della Gestapo!",
+	"MOTMS": "+1 Motivazione o -1 Supporto Militare", "QUALSIASI": "Qualsiasi Oggetto"}
+## Oggetti jolly: sostituiscono qualsiasi oggetto in complotti e consegne.
+const WILD_ITEMS := ["PROVE", "QUALSIASI"]
 const LEADERS := ["HITLER", "HIMMLER", "GOEBBELS", "GOERING", "HESS", "BORMANN"]
 const DEPUTIES := ["HIMMLER", "GOEBBELS", "GOERING", "HESS", "BORMANN"]
 const LEADER_NAMES := {"HITLER": "Hitler", "HIMMLER": "Himmler", "GOEBBELS": "Goebbels", "GOERING": "Goering", "HESS": "Hess", "BORMANN": "Bormann"}
@@ -98,6 +103,21 @@ const CONSPIRATORS := [
 		"text": "➡ Risolvi 1 carta illegale ➡ nel tuo dossier e raddoppia i suoi effetti (una volta per stadio)."},
 	{"name": "Fabian von Schlabrendorff", "aff": "Wehrmacht", "role": "Assistente del Col. Tresckow", "ability": "schlabrendorff",
 		"text": "Puoi tirare 1 dado aggiuntivo quando esegui l'azione Cospirare."},
+	# --- La Resistenza ---
+	{"name": "Robert Bernardis", "aff": "Wehrmacht", "role": "Oberstleutnant, pioniere", "ability": "bernardis", "exp": true,
+		"text": "Puoi muoverti nelle caselle con un numero di stadio superiore di 1 rispetto a quello attuale. Allo Stadio 7, nessuna casella è inaccessibile per te."},
+	{"name": "Margarethe von Oven", "aff": "Civile", "role": "Segretaria del generale Tresckow", "ability": "oven", "exp": true,
+		"text": "Ogni volta che puoi aumentare il tuo livello di motivazione, puoi invece decidere di diminuire di 1 il tuo livello di sospetto."},
+	{"name": "Helmuth James von Moltke", "aff": "Abwehr", "role": "Esperto di diritto internazionale", "ability": "moltke", "exp": true,
+		"text": "Sottrai 1 aquila ogni volta che tiri 1 o più dadi. (Nei tiri di un solo dado eviti la penalità dell'aquila, ma non ottieni un successo.)"},
+	{"name": "Erika von Tresckow", "aff": "Civile", "role": "Dattilografa e moglie del generale Tresckow", "ability": "erika", "exp": true,
+		"text": "Quando esegui l'azione Cospirare, ignora tutti i risultati aquila."},
+	{"name": "Libertas Schulze-Boysen", "aff": "Civile", "role": "Aristocratica e combattente della resistenza", "ability": "libertas", "exp": true,
+		"mot_min": 1, "mot_max": 2, "mot_start": 1, "no_plots": true,
+		"text": "Inizia Scettica e resta tra Scettico e Determinato: non può mai tentare complotti.\n➡ Aumenta di 1 la motivazione di un cospiratore nella tua casella OPPURE cedi 1 tua carta o 1 tuo oggetto a un cospiratore in qualsiasi casella."},
+	{"name": "Mildred Fish-Harnack", "aff": "Civile", "role": "Letterata comunista", "ability": "mildred", "exp": true,
+		"mot_max": 3,
+		"text": "La motivazione non può salire a Temerario.\nQuando peschi una carta evento nel tuo turno, puoi scegliere di risolverne o ignorarne gli effetti (tranne i Raid della Gestapo)."},
 ]
 
 # ---------------- Carte cospiratore ----------------
@@ -131,6 +151,11 @@ const CCARDS := {
 	"SOTTO_COPERTURA": {"name": "Sotto Copertura", "trig": "bolt", "illegal": false, "text": "⚡ Ignora 1 risultato aquila in un tentativo di complotto."},
 	"ATROCITA": {"name": "Atrocità Documentate", "trig": "act", "illegal": true, "text": "Solo ad Auschwitz o Treblinka: -1 Supporto Militare, tutti i cospiratori +1 motivazione."},
 	"COMUNICATO": {"name": "Comunicato Urgente", "trig": "bolt", "illegal": false, "text": "⚡ Muovi 2 delegati in 1 qualsiasi casella."},
+	# --- La Resistenza (Horst Kopkow / Orchestra Rossa) ---
+	"ORDINI_K": {"name": "Ordini Contraffatti", "trig": "act", "illegal": false, "text": "Muovi Kopkow in una qualsiasi casella dello stadio attuale o di uno stadio precedente."},
+	"PROVE_D": {"name": "Prove Distrutte", "trig": "act", "illegal": true, "text": "Rimescola nel mazzo incontro 1 carta dal fondo della pila degli scarti incontro."},
+	"TRASF_NASC": {"name": "Trasferire il Nascondiglio", "trig": "bolt", "illegal": false, "text": "⚡ Muovi 1 telescrivente in una qualsiasi casella accessibile."},
+	"AIUTARE": {"name": "Aiutare la Resistenza", "trig": "act", "illegal": true, "text": "Colloca 1 telescrivente su una qualsiasi casella accessibile."},
 }
 # ordine delle 39 carte sul foglio TTS (c00..c38)
 const CDECK_SHEET := ["SCORTA", "VOLO", "INFO_VITALE", "SEDIZIONE", "MOMENTO", "NULLA_OSTA", "SEGRETI", "PIANIFICAZIONE", "COMUNICAZIONE", "ALIBI",
@@ -300,4 +325,164 @@ const INTERR := [
 		"C": ["Effetti Personali", [REL, ["take_discard"]]]},
 	{"A": ["Spiffera i Nomi", [["or", [["susp_one", 2]], [["susp_two", 1]]]]], "B": ["Rivela i Piani", [["plot_one", 1], REL]],
 		"res": {"T": [REL], "3": [["plot_one", 1]], "2": [["plot_one", 1]], "1": [["plot_one", 1]], "E": [["plot_total", 2]]}},
+]
+
+
+# =====================================================================
+# Espansione «La Resistenza»
+# =====================================================================
+## Carte cospiratore aggiuntive (rNN): tipo e modulo.
+const RCARDS := {"r00": "ORDINI_K", "r01": "ORDINI_K", "r02": "PROVE_D", "r03": "PROVE_D",
+	"r04": "TRASF_NASC", "r05": "TRASF_NASC", "r06": "AIUTARE", "r07": "AIUTARE"}
+const RCARDS_KK := ["r00", "r01", "r02", "r03"]
+const RCARDS_OR := ["r04", "r05", "r06", "r07"]
+
+## Carte evento dell'espansione: mod = modulo (or/kk/ck).
+const XEVENTS := {
+	"x00": {"name": "Kopkow è in Movimento", "stage": 2, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x01": {"name": "Kopkow è in Movimento", "stage": 2, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x02": {"name": "Alleato Arrestato", "stage": 2, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x03": {"name": "Telescrivente Scoperta", "stage": 2, "kind": "std", "fx": "telscop:HESS", "mod_req": "or"},
+	"x04": {"name": "Kopkow è in Movimento", "stage": 3, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x05": {"name": "Kopkow è in Movimento", "stage": 3, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x06": {"name": "Alleato Arrestato", "stage": 3, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x07": {"name": "Telescrivente Scoperta", "stage": 3, "kind": "std", "fx": "telscop:GOEBBELS", "mod_req": "or"},
+	"x08": {"name": "Kopkow è in Movimento", "stage": 4, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x09": {"name": "Messaggio Intercettato", "stage": 4, "kind": "std", "fx": "msgint", "mod_req": "kk"},
+	"x10": {"name": "Alleato Arrestato", "stage": 4, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x11": {"name": "Telescrivente Scoperta", "stage": 4, "kind": "std", "fx": "telscop:BORMANN", "mod_req": "or"},
+	"x12": {"name": "Kopkow è in Movimento", "stage": 5, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x13": {"name": "Messaggio Intercettato", "stage": 5, "kind": "std", "fx": "msgint", "mod_req": "kk"},
+	"x14": {"name": "Alleato Arrestato", "stage": 5, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x15": {"name": "Telescrivente Scoperta", "stage": 5, "kind": "std", "fx": "telscop:HIMMLER", "mod_req": "or"},
+	"x16": {"name": "Kopkow è in Movimento", "stage": 6, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x17": {"name": "Messaggio Intercettato", "stage": 6, "kind": "std", "fx": "msgint", "mod_req": "kk"},
+	"x18": {"name": "Alleato Arrestato", "stage": 6, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x19": {"name": "Telescrivente Scoperta", "stage": 6, "kind": "std", "fx": "telscop:GOERING", "mod_req": "or"},
+	"x20": {"name": "Kopkow è in Movimento", "stage": 7, "kind": "std", "fx": "kim", "mod_req": "kk"},
+	"x21": {"name": "Messaggio Intercettato", "stage": 7, "kind": "std", "fx": "msgint", "mod_req": "kk"},
+	"x22": {"name": "Alleato Arrestato", "stage": 7, "kind": "std", "fx": "allarr", "mod_req": "ck"},
+	"x23": {"name": "Telescrivente Scoperta", "stage": 7, "kind": "std", "fx": "telscop:HITLER", "mod_req": "or"},
+}
+
+## Orchestra Rossa: colori delle telescriventi.
+const TEL_COLORS := ["A", "R", "G"]
+const TEL_NAMES := {"A": "azzurra", "R": "rossa", "G": "gialla", "V": "volantino", "P": "permanente"}
+const TEL_IMG := {"A": "TEL_B", "R": "TEL_R", "G": "TEL_Y", "V": "VOL", "P": "TEL_P"}
+
+## Carte missione. k = chiave della logica; kind: auto (si completa da sola), free (gratuita),
+## act (costa 1 azione: tiro di dadi), comb (Combattente della Resistenza), arrest (legata agli arresti).
+const MISSIONS := [
+	{"k": "contromessaggio", "name": "Contromessaggio", "kind": "auto",
+		"req": "Colloca 1 volantino in ciascuna di 3 caselle diverse in cui si trovano Hitler o i suoi delegati.",
+		"rew": "Le penalità di Hitler e dei delegati vengono ignorate fino all'inizio del tuo prossimo turno."},
+	{"k": "arresto_gestapo", "name": "Arresto Imminente", "kind": "auto", "sp": "GESTAPO",
+		"req": "Hai un livello di sospetto Basso nel QG della Gestapo.", "rew": "Effettua immediatamente un'azione Cospirare gratuita (con 3 dadi)."},
+	{"k": "intercetta_hess", "name": "Intercettare le Prove", "kind": "act", "leader": "HESS",
+		"req": "Nella casella di Hess: ➡ tira 3 dadi. Se ottieni 2 o più simboli uguali (non aquila), hai successo.", "rew": "Prendi 1 oggetto Prove."},
+	{"k": "goebbels", "name": "Goebbels Informato", "kind": "arrest",
+		"req": "Manda in prigione il cospiratore più vicino a Goebbels.", "rew": "Imposta il sospetto di tutti gli altri cospiratori su Basso."},
+	{"k": "inventario", "name": "Inventario Aggiornato", "kind": "free",
+		"req": "Scarta 2 oggetti in una qualsiasi località fortificata.", "rew": "Rivela tutti gli oggetti nelle caselle dello stadio attuale e di quelli precedenti."},
+	{"k": "segreti", "name": "Proteggere i Segreti", "kind": "free",
+		"req": "Scarta 1 oggetto Esplosivi in una località fortificata con un delegato presente.", "rew": "Aumenta di 1 la tua motivazione. Muovi 1 qualsiasi delegato di un massimo di 3 caselle."},
+	{"k": "autorizzazione", "name": "Autorizzazione di Sicurezza", "kind": "free",
+		"req": "Scarta 1 oggetto Firma nel QG della Gestapo.", "rew": "Ignora il prossimo Raid della Gestapo."},
+	{"k": "conversazione", "name": "Conversazione Interessante", "kind": "act",
+		"req": "In una qualsiasi casella di Berlino: ➡ tira 1 dado per ogni carta in possesso di tutti i cospiratori. Se non ottieni alcuna aquila, hai successo.",
+		"rew": "Per il resto della partita, tutti i cospiratori aumentano di 1 il proprio Limite di Dossier."},
+	{"k": "falsario", "name": "Esperto Falsario", "kind": "free",
+		"req": "Scarta 3 carte a Zurigo.", "rew": "Ogni cospiratore cerca e prende 1 qualsiasi carta dal mazzo cospiratore. Mescola il mazzo."},
+	{"k": "promuovi_berlino", "name": "Promuovere la Resistenza", "kind": "auto",
+		"req": "Colloca nelle caselle di Berlino un numero di volantini pari al numero di giocatori.", "rew": "Tutti i cospiratori a Berlino aumentano di 2 la motivazione."},
+	{"k": "arresto_dh", "name": "Arresto Imminente", "kind": "auto", "sp": "DEUTSCHLANDHALLE",
+		"req": "Hai un livello di sospetto Basso al Deutschlandhalle.", "rew": "Effettua immediatamente un'azione Cospirare gratuita (con 3 dadi)."},
+	{"k": "informare", "name": "Informare gli Alleati", "kind": "free",
+		"req": "Scarta 1 qualsiasi oggetto a Stoccolma.", "rew": "Diminuisci di 2 il Supporto Militare di Hitler."},
+	{"k": "stalin", "name": "Messaggio a Stalin", "kind": "free",
+		"req": "Scarta 1 oggetto Informazioni a Varsavia. Non possono esserci delegati presenti.", "rew": "Diminuisci di 1 il Supporto Militare di Hitler."},
+	{"k": "confine", "name": "Oltre il Confine", "kind": "comb", "from": "HANNOVER", "to": ["PARIGI"],
+		"req": "Ad Hannover aumenta di 2 il sospetto e prendi un Combattente della Resistenza. Consegnalo a Parigi prima del prossimo Raid della Gestapo.",
+		"rew": "Non aumentare il Supporto Militare di Hitler per esserti mosso a Parigi."},
+	{"k": "cielo", "name": "Aiuto dal Cielo", "kind": "comb", "from": "ANLAGE_SUD", "to": ["DEUTSCHLANDHALLE", "CANCELLERIA", "ZEUGHAUS", "MINISTERO", "GESTAPO", "SPORTPALAST"],
+		"req": "In Anlage Süd aumenta di 2 il sospetto e prendi un Combattente della Resistenza. Consegnalo in una casella di Berlino (non la Stazione) prima del prossimo Raid.",
+		"rew": "Diminuisci di 2 il tuo sospetto."},
+	{"k": "tieni_duro", "name": "«Tieni Duro»", "kind": "arrest",
+		"req": "Fatti arrestare e rilasciare.", "rew": "Imposta il sospetto su Basso. Prendi 1 oggetto scartato."},
+	{"k": "dodd", "name": "Contattare Martha Dodd", "kind": "auto",
+		"req": "Ogni cospiratore deve avere 2 o più carte illegali.", "rew": "Ogni cospiratore riduce di 2 il sospetto."},
+	{"k": "prove_fort", "name": "In Cerca di Prove", "kind": "act",
+		"req": "In una località fortificata: ➡ tira 3 dadi. Se ottieni 2 o più simboli uguali (non aquila), hai successo.", "rew": "Prendi 1 oggetto Prove."},
+	{"k": "piani", "name": "Piani Pericolosi", "kind": "comb", "from": "TREBLINKA", "to": ["NORIMBERGA"],
+		"req": "A Treblinka aumenta di 2 il sospetto e prendi un Combattente della Resistenza. Consegnalo a Norimberga prima del prossimo Raid.",
+		"rew": "Diminuisci di 2 il tuo sospetto."},
+	{"k": "bormann", "name": "Incastrare Martin Bormann", "kind": "act",
+		"req": "Una telescrivente deve essere nella casella di Bormann. ➡ Tira 1 dado per ogni telescrivente sul tabellone: con 2 o più ⊕ hai successo.", "rew": "Rimuovi dal gioco Bormann."},
+	{"k": "intercetta_himmler", "name": "Intercettare le Prove", "kind": "act", "leader": "HIMMLER",
+		"req": "Nella casella di Himmler: ➡ tira 3 dadi. Se ottieni 2 o più simboli uguali (non aquila), hai successo.", "rew": "Prendi 1 oggetto Prove."},
+	{"k": "reclutamento", "name": "Reclutamento di un Alleato", "kind": "act",
+		"req": "A Wolfsschanze: ➡ tira 1 dado per ogni oggetto che possiedi. Con 1 o più ⊕ hai successo.",
+		"rew": "Colloca la telescrivente permanente su Wolfsschanze (rimossa solo allo Stadio 7)."},
+	{"k": "fuggitivi", "name": "Nascondere i Fuggitivi", "kind": "auto",
+		"req": "Un cospiratore possiede 1 oggetto Firma e 1 oggetto Credenziali.",
+		"rew": "Prendi il segnalino nascondiglio: mettilo su una carta illegale (spostabile in qualsiasi momento). Durante i Raid quella carta conta come non illegale."},
+	{"k": "lista", "name": "Lista dei Cospiratori", "kind": "free",
+		"req": "Scarta 1 oggetto Esplosivi nella casella di Hitler.", "rew": "Aumenta di 1 la tua motivazione. Muovi Hitler di un massimo di 3 caselle."},
+	{"k": "riunione", "name": "Riunione Segreta", "kind": "free",
+		"req": "Tutti i cospiratori devono trovarsi nella stessa casella. Aumenta di 1 il sospetto di ogni cospiratore.",
+		"rew": "Prendi 1 oggetto scartato. I giocatori possono scambiarsi liberamente carte e tessere fino alla fine del turno."},
+	{"k": "promuovi_23", "name": "Promuovere la Resistenza", "kind": "auto",
+		"req": "Colloca nelle caselle degli Stadi 2 e 3 un numero di volantini pari al numero di giocatori.", "rew": "Tutti i cospiratori nelle caselle degli Stadi 2 e 3 aumentano di 2 la motivazione."},
+	{"k": "prove_st4", "name": "In Cerca di Prove", "kind": "act",
+		"req": "In una casella dello Stadio 4: ➡ tira 3 dadi. Se ottieni 2 o più simboli uguali (non aquila), hai successo.", "rew": "Prendi 1 oggetto Prove."},
+]
+
+## Horst Kopkow: carte incontro.
+const ENCOUNTERS := [
+	{"k": "legame", "name": "Legame di Fiducia"},
+	{"k": "conti", "name": "I Conti Tornano"},
+	{"k": "mormorii", "name": "Mormorii"},
+	{"k": "attenzione", "name": "Attirare l'Attenzione"},
+	{"k": "niente", "name": "Niente da Fare"},
+	{"k": "contrattempo", "name": "Contrattempo"},
+	{"k": "attivita", "name": "Attività Sospette"},
+	{"k": "tempo", "name": "Il Tempo sta Scadendo"},
+	{"k": "fallirete", "name": "Fallirete"},
+	{"k": "cautela", "name": "Eccesso di Cautela"},
+	{"k": "agnello", "name": "Agnello Sacrificale"},
+	{"k": "favore", "name": "Restituire il Favore"},
+	{"k": "annullato", "name": "Complotto Annullato"},
+	{"k": "inizio", "name": "Un Nuovo Inizio"},
+	{"k": "scompartimento", "name": "Scompartimento Segreto"},
+	{"k": "sventato", "name": "Piano Sventato"},
+	{"k": "fiato", "name": "Fiato sul Collo"},
+	{"k": "documenti", "name": "Documenti Sospetti"},
+]
+
+## Circolo di Kreisau: tessere alleato (capacità monouso ⚡).
+const ALLIES := [
+	{"k": "haubach", "name": "Theodor Haubach", "role": "Giornalista", "text": "Non risolvere una carta evento in questo turno."},
+	{"k": "lukaschek", "name": "Hans Lukaschek", "role": "Avvocato", "text": "Invece di risolvere una carta interrogatorio, vieni rilasciato dalla prigione."},
+	{"k": "leber", "name": "Julius Leber", "role": "Politico", "text": "Diminuisci di 1 ciascuno il sospetto di 2 cospiratori."},
+	{"k": "pyorck", "name": "Peter Yorck", "role": "Coordinatore della resistenza", "text": "Muovi un massimo di 3 cospiratori in 1 o più caselle disponibili."},
+	{"k": "gerstenmaier", "name": "Eugen Gerstenmaier", "role": "Teologo", "text": "Aumenta di 1 ciascuno la motivazione di 2 cospiratori."},
+	{"k": "freya", "name": "Freya von Moltke", "role": "Avvocata e ricercatrice", "text": "Rivela entrambi gli oggetti in una qualsiasi casella. Se 1 o più sono tessere Raid della Gestapo, puoi ignorarle."},
+	{"k": "reichwein", "name": "Rosemarie Reichwein", "role": "Dottoressa", "text": "Gira 1 dado con un risultato aquila su una qualsiasi faccia."},
+	{"k": "rosch", "name": "Augustin Rösch", "role": "Prete gesuita", "text": "Ignora tutti i risultati aquila durante un complotto."},
+	{"k": "trotha", "name": "Margarete von Trotha", "role": "Economista", "text": "Raccogli (o risolvi) l'oggetto in cima su 2 caselle qualsiasi, rivelato o meno."},
+	{"k": "trott", "name": "Adam von Trott", "role": "Diplomatico", "text": "Consegna un oggetto a Zurigo o Stoccolma per ridurre di 1 il Supporto Militare di Hitler."},
+	{"k": "myorck", "name": "Marion Yorck", "role": "Avvocata", "text": "Ignora una carta o tessera Raid della Gestapo."},
+	{"k": "peters", "name": "Hans Peters", "role": "Professore", "text": "Pesca 5 carte cospiratore. Conservane 1 e rimescola le altre nel mazzo."},
+	{"k": "einsiedel", "name": "Horst von Einsiedel", "role": "Economista", "text": "Pesca 3 carte cospiratore."},
+	{"k": "poelchau", "name": "Harald Poelchau", "role": "Cappellano del carcere", "text": "Impedisci a un cospiratore di andare in prigione se ci sono altri cospiratori attualmente in prigione."},
+	{"k": "mierendorff", "name": "Carlo Mierendorff", "role": "Attivista, Fronte di Ferro", "text": "Usa 3 azioni per cospirare con 6 dadi invece di 3."},
+]
+## Status del Circolo (indice = numero di alleati reclutati): [modifica ⊕, aquile aggiunte, testo]
+const KREISAU_STATUS := [
+	[0, 0, "Nessun alleato: non è possibile tentare complotti."],
+	[-1, 1, "Prima riunione del Circolo: −1 ⊕, +1 aquila e ogni complotto richiede Temerario."],
+	[-1, 1, "Inizia la pianificazione: −1 ⊕, +1 aquila."],
+	[-1, 0, "Scritti sull'economia del dopoguerra: −1 ⊕."],
+	[0, 0, "Costituzione del dopoguerra: nessuna modifica."],
+	[1, 0, "Funzionari per il governo del dopoguerra: +1 ⊕."],
 ]

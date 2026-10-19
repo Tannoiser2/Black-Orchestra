@@ -22,8 +22,12 @@ var s: Dictionary = {}
 var rng := RandomNumberGenerator.new()
 var adj := {}
 var berlin: Array = []
+## Tutte le carte evento (base + espansione).
+var EV := {}
 
 func _init() -> void:
+	EV = BOData.EVENTS.duplicate()
+	EV.merge(BOData.XEVENTS)
 	for k in BOData.SPACES:
 		adj[k] = []
 		if BOData.SPACES[k].stage == 0:
@@ -51,15 +55,21 @@ func new_game(cids: Array, diff: int, variants: Dictionary, seed_val: int = 0) -
 		"faulty": -1, "surveil": -1, "blocked": [], "anzio": false,
 		"hitler_moved": false, "over": false, "won": false, "reason": "",
 		"dohnanyi_stage": 0, "log": [], "variants": variants, "phase": "",
+		"oven_pending": [], "ev_ignored": false,
+		"mods": {"or": variants.get("mod_or", false), "kk": variants.get("mod_kk", false), "ck": variants.get("mod_ck", false)},
 	}
 	# mazzi evento
 	for st in range(1, 8):
 		var d: Array = []
-		for id in BOData.EVENTS:
-			if BOData.EVENTS[id].stage == st:
-				d.append(id)
+		for id in EV:
+			if EV[id].stage == st:
+				var mr: String = EV[id].get("mod_req", "")
+				if mr == "" or s.mods[mr]:
+					d.append(id)
 		shuffle(d)
 		var remove_n := 3 if variants.get("urgency", false) else 2
+		if st >= 2:
+			remove_n += (1 if s.mods.or else 0) + (2 if s.mods.kk else 0) + (1 if s.mods.ck else 0)
 		if st == 7 and variants.get("no_docs", false):
 			d.erase("e18_05")
 			s.ev_removed.append("e18_05")
@@ -75,6 +85,10 @@ func new_game(cids: Array, diff: int, variants: Dictionary, seed_val: int = 0) -
 		cd.append("plot_" + l)
 	if variants.get("promo_plot", true):
 		cd.append("plot_P")
+	if s.mods.or:
+		cd.append_array(BOData.RCARDS_OR)
+	if s.mods.kk:
+		cd.append_array(BOData.RCARDS_KK)
 	shuffle(cd)
 	s.cdeck = cd
 	# interrogatorio
@@ -85,15 +99,27 @@ func new_game(cids: Array, diff: int, variants: Dictionary, seed_val: int = 0) -
 	s.ideck = idk
 	# oggetti
 	var items: Array = []
-	for t in BOData.ITEM_NAMES:
+	for t in BOData.BASE_ITEMS:
 		for k in range(3):
 			items.append(t)
+	if s.mods.ck:
+		for k in range(15):
+			items.append("ALLEATO")
+		for t in ["RAIDT", "MOTMS", "QUALSIASI"]:
+			for k in range(3):
+				items.append(t)
 	shuffle(items)
+	var per_space := 2 if s.mods.ck else 1
 	for sp in BOData.SPACES:
 		if BOData.SPACES[sp].deliver.size() > 0:
-			s.board_items[sp] = {"t": items.pop_front(), "rev": false}
+			var stack: Array = []
+			for k in range(per_space):
+				stack.append({"t": items.pop_front(), "rev": false})
+			s.board_items[sp] = stack
 	for cid in cids:
-		s.players.append({"cid": cid, "space": "STAZIONE", "mot": 0, "susp": 1, "items": [], "dossier": [], "prison": false})
+		var cd0 = BOData.CONSPIRATORS[cid]
+		s.players.append({"cid": cid, "space": "STAZIONE", "mot": cd0.get("mot_start", 0), "susp": 1, "items": [], "dossier": [], "prison": false})
+	exp_setup()
 	log_msg("Nuova partita – difficoltà %s, Supporto Militare di Hitler iniziale %d." % [["Facile", "Normale", "Difficile"][diff], s.ms])
 
 func shuffle(a: Array) -> void:
@@ -111,6 +137,16 @@ func load_text(t: String) -> bool:
 	if typeof(v) != TYPE_DICTIONARY or not v.has("s"):
 		return false
 	s = v.s
+	for sp in s.board_items.keys():
+		if typeof(s.board_items[sp]) == TYPE_DICTIONARY:
+			s.board_items[sp] = [s.board_items[sp]]
+	if not s.has("mods"):
+		s.mods = {"or": false, "kk": false, "ck": false}
+	if not s.has("oven_pending"):
+		s.oven_pending = []
+		s.ev_ignored = false
+	if not s.has("orr"):
+		exp_setup()
 	rng.seed = v.get("seed", 0)
 	rng.state = v.get("rng", 0)
 	return true
@@ -186,6 +222,14 @@ func valid(sp: String, st: int = -1) -> bool:
 		return false
 	return d.stage <= st
 
+## Validità di una casella per il movimento di un cospiratore (Bernardis può andare uno stadio oltre).
+func valid_for(i: int, sp: String) -> bool:
+	if i >= 0 and ab_on(i, "bernardis") and BOData.SPACES.has(sp):
+		if s.stage >= 7:
+			return true
+		return BOData.SPACES[sp].stage <= s.stage + 1
+	return valid(sp)
+
 func dists_from(sp: String, only_valid: bool = false) -> Dictionary:
 	var dd := {sp: 0}
 	var q: Array = [sp]
@@ -200,11 +244,11 @@ func dists_from(sp: String, only_valid: bool = false) -> Dictionary:
 			q.append(n)
 	return dd
 
-func spaces_within(sp: String, n: int) -> Array:
-	var dd := dists_from(sp, true)
+func spaces_within(sp: String, n: int, who: int = -1) -> Array:
+	var dd := dists_from(sp, true) if who < 0 or not ab_on(who, "bernardis") else dists_from(sp, false)
 	var r: Array = []
 	for k in dd:
-		if k != sp and dd[k] <= n:
+		if k != sp and dd[k] <= n and (who < 0 or valid_for(who, k)):
 			r.append(k)
 	return r
 
@@ -242,13 +286,18 @@ func dossier_limit(i: int) -> int:
 	if P(i).mot == 0:
 		return 2
 	var base := 6 if np() <= 2 else (5 if np() <= 4 else 4)
+	if s.mods.or:
+		base += s.orr.dossier_bonus
 	return base + (2 if ab_on(i, "goerdeler") else 0)
 
 func item_limit(i: int) -> int:
 	return (4 if np() <= 2 else 3) + (1 if ab_on(i, "tresckow") else 0)
 
 func mot_floor(i: int) -> int:
-	return 2 if ab_on(i, "gersdorff") else 0
+	return maxi(2 if ab_on(i, "gersdorff") else 0, BOData.CONSPIRATORS[P(i).cid].get("mot_min", 0))
+
+func mot_cap(i: int) -> int:
+	return BOData.CONSPIRATORS[P(i).cid].get("mot_max", 4)
 
 func susp_floor(i: int) -> int:
 	return 1 if ab_on(i, "gersdorff") else 0
@@ -257,7 +306,11 @@ func add_mot(i: int, d: int) -> void:
 	var p := P(i)
 	if p.prison or d == 0:
 		return
-	var v := clampi(p.mot + d, 0, 4)
+	if d > 0 and ab_on(i, "oven") and p.mot < mot_cap(i):
+		for k in range(d):
+			s.oven_pending.append(i)
+		return
+	var v := clampi(p.mot + d, 0, mot_cap(i))
 	if d > 0 and ab_on(i, "scholl"):
 		v = mini(v, maxi(3, p.mot))
 	if d < 0:
@@ -303,6 +356,22 @@ func roll(n: int) -> Array:
 		r.append(FACES[rng.randi_range(0, 5)])
 	return r
 
+## Tiro di dadi di un cospiratore: applica Moltke (−1 aquila). Restituisce i risultati.
+func roll_by(i: int, n: int) -> Array:
+	var r := roll(n)
+	if i >= 0 and ab_on(i, "moltke") and "E" in r:
+		r.erase("E")
+		log_msg("Moltke sottrae un'aquila dal tiro.")
+	return r
+
+## Tiro di un solo dado: restituisce la faccia, oppure "" se Moltke ha annullato l'aquila (nessun effetto).
+func roll1_by(i: int) -> String:
+	var r := roll(1)
+	if r[0] == "E" and i >= 0 and ab_on(i, "moltke"):
+		log_msg("Moltke annulla l'aquila: nessun effetto.")
+		return ""
+	return r[0]
+
 func dice_txt(r: Array) -> String:
 	var t: Array = []
 	for f in r:
@@ -313,6 +382,8 @@ func dice_txt(r: Array) -> String:
 func ctype(cid: String) -> String:
 	if cid.begins_with("plot_"):
 		return "PLOT"
+	if cid.begins_with("r"):
+		return BOData.RCARDS[cid]
 	return BOData.CDECK_SHEET[int(cid.substr(1))]
 
 func is_plot(cid: String) -> bool:
@@ -329,15 +400,25 @@ func cardname(cid: String) -> String:
 func is_illegal(cid: String) -> bool:
 	return not is_plot(cid) and BOData.CCARDS[ctype(cid)].illegal
 
+## Illegale ai fini dei Raid (il nascondiglio dell'Orchestra Rossa protegge una carta).
+func is_illegal_raid(cid: String) -> bool:
+	if s.mods.or and s.orr.hideout == cid:
+		return false
+	return is_illegal(cid)
+
 func card_trig(cid: String) -> String:
 	if is_plot(cid):
 		return "plot"
 	return BOData.CCARDS[ctype(cid)].trig
 
 func cimg(cid: String) -> String:
+	if cid.begins_with("r"):
+		return "res://assets/res/consp/%s.jpg" % cid
 	return "res://assets/cards/consp/%s.jpg" % cid
 
 func eimg(eid: String) -> String:
+	if eid.begins_with("x"):
+		return "res://assets/res/events/%s.jpg" % eid
 	return "res://assets/cards/event/%s.jpg" % eid
 
 func card_opts(cards: Array) -> Array:
@@ -381,17 +462,25 @@ func find_card(i: int, t: String) -> int:
 func discard_item(i: int, idx: int) -> void:
 	var t = P(i).items[idx]
 	P(i).items.remove_at(idx)
-	s.item_discard.append(t)
 	log_msg("%s scarta l'oggetto %s." % [cname(i), BOData.ITEM_NAMES[t]])
+	if t == "PROVE":
+		s.orr.prove += 1
+	elif t == "COMB":
+		comb_lost(i)
+	else:
+		s.item_discard.append(t)
 
 func item_opts(items: Array) -> Array:
 	var r: Array = []
 	for t in items:
-		r.append({"label": BOData.ITEM_NAMES[t], "img": "res://assets/items/%s.png" % t})
+		r.append({"label": BOData.ITEM_NAMES[t], "img": item_img(t)})
 	return r
 
+func item_img(t: String) -> String:
+	return "res://assets/items/%s.png" % t
+
 ## Sorgenti di un oggetto di tipo t (oppure "ANY"): oggetti e Pistola Nascosta (conta come Armi).
-func item_sources(i: int, t: String, others_here: bool) -> Array:
+func item_sources(i: int, t: String, others_here: bool, wild: bool = true, allow_comb: bool = false) -> Array:
 	var who: Array = [i]
 	if others_here:
 		for j in players_in(P(i).space):
@@ -401,7 +490,8 @@ func item_sources(i: int, t: String, others_here: bool) -> Array:
 	for j in who:
 		var it: Array = P(j).items
 		for k in range(it.size()):
-			if t == "ANY" or it[k] == t:
+			var ok: bool = it[k] == t or (t == "ANY" and (it[k] != "COMB" or allow_comb)) or (wild and t != "ANY" and it[k] in BOData.WILD_ITEMS)
+			if ok:
 				var lbl: String = BOData.ITEM_NAMES[it[k]] + ("" if j == i else " (di %s)" % cname(j))
 				r.append({"who": j, "kind": "item", "idx": k, "t": it[k], "label": lbl, "img": "res://assets/items/%s.png" % it[k]})
 		if t == "ANY" or t == "ARMI":
@@ -421,6 +511,12 @@ func arrest(i: int) -> void:
 	var p := P(i)
 	if p.prison:
 		return
+	if s.mods.ck and prisoners().size() > 0 and ally_ready("poelchau"):
+		use_ally("poelchau")
+		log_msg("Harald Poelchau impedisce l'arresto di %s." % cname(i))
+		return
+	if s.mods.or:
+		or_on_arrest(i)
 	for c in p.dossier.duplicate():
 		if is_illegal(c):
 			p.dossier.erase(c)
@@ -442,6 +538,8 @@ func release(i: int, susp: int = 2) -> void:
 	moved.emit("P%d" % i, "PRISON", "GESTAPO")
 	p.susp = susp
 	log_msg("🔓 %s viene rilasciato (sospetto %s) e si trova al QG Gestapo." % [cname(i), BOData.SUSP_NAMES[susp]])
+	if s.mods.or:
+		or_on_release(i)
 
 func lose(reason: String) -> void:
 	if s.over:
@@ -478,7 +576,10 @@ func move_consp(i: int, sp: String) -> void:
 	if en.has("mot"):
 		add_mot(i, en.mot)
 	if en.has("ms"):
-		add_ms(en.ms)
+		if not (sp == "PARIGI" and s.mods.or and comb_carrier_for("confine") == i):
+			add_ms(en.ms)
+		else:
+			log_msg("Oltre il Confine: il Supporto Militare non aumenta.")
 	if sp == "NORIMBERGA" and s.current == "e16_03":
 		set_susp(i, 0)
 
@@ -489,6 +590,7 @@ func move_leader(l: String, sp: String) -> void:
 	s.leaders[l] = sp
 	moved.emit(l, from, sp)
 	log_msg("%s si sposta a %s." % [BOData.LEADER_NAMES[l], spname(sp)])
+	leader_entered(sp)
 
 ## Movimento di Hitler causato da una carta evento (può essere annullato da Rallentare Hitler).
 func ev_move_hitler(sp: String) -> bool:
@@ -582,6 +684,8 @@ func relocate_no7(st: int, by_event: bool = false) -> void:
 				move_leader(l, dest)
 	for i in free_list():
 		var sp: String = P(i).space
+		if st >= 7 and ab_on(i, "bernardis"):
+			continue
 		if BOData.SPACES[sp].no7:
 			var c := nearest_valid(sp, st, true)
 			var dest: String = c[0]
@@ -593,6 +697,9 @@ func relocate_no7(st: int, by_event: bool = false) -> void:
 # Limiti
 # =====================================================================
 func enforce_limits() -> void:
+	await resolve_oven()
+	if s.mods.or:
+		await check_missions()
 	for i in range(np()):
 		var p := P(i)
 		while p.dossier.size() > dossier_limit(i) and not s.over:
@@ -616,7 +723,7 @@ func run() -> void:
 
 func new_turn_flags() -> void:
 	s.turn = {"actions": 3, "conspired": false, "no_ability": false, "no_conspire": false,
-		"bonhoeffer": false, "extra_events": 0, "skip_events": false}
+		"bonhoeffer": false, "extra_events": 0, "skip_events": false, "free_transfer": false}
 
 func play_turn() -> void:
 	var i: int = s.active
@@ -624,6 +731,7 @@ func play_turn() -> void:
 	s.phase = "start"
 	log_msg("──── Turno %d: %s ────" % [s.turn_no, cname(i)])
 	turn_started.emit()
+	exp_turn_start(i)
 	upd()
 	if P(i).prison:
 		s.phase = "interrogation"
@@ -632,6 +740,7 @@ func play_turn() -> void:
 		if s.over:
 			return
 		await draw_events_step(i)
+		await kopkow_step()
 		return
 	# inizio turno: capacità
 	if ab_on(i, "goerdeler"):
@@ -646,6 +755,11 @@ func play_turn() -> void:
 	if ab_on(i, "stauffenberg"):
 		s.turn.actions += 1
 		log_msg("Stauffenberg: 1 azione aggiuntiva.")
+	if s.mods.kk and s.kk.favore == i:
+		s.kk.favore = -1
+		s.turn.actions = mini(s.turn.actions, 2)
+		s.turn.no_conspire = true
+		log_msg("Restituire il Favore: %s ha solo 2 azioni e non può cospirare." % cname(i))
 	await enforce_limits()
 	if s.over:
 		return
@@ -665,11 +779,16 @@ func play_turn() -> void:
 		return
 	# 3. evento
 	await draw_events_step(i)
+	# 4. Horst Kopkow
+	await kopkow_step()
 
 func penalties(i: int) -> void:
 	var sp: String = P(i).space
 	var ls := leaders_in(sp)
 	if ls.is_empty():
+		return
+	if s.mods.or and s.orr.no_pen >= 0:
+		log_msg("Contromessaggio: le penalità di Hitler e dei delegati vengono ignorate.")
 		return
 	if ab_on(i, "beck") or ab_on(i, "helldorf"):
 		log_msg("%s ignora le penalità di Hitler e dei delegati." % cname(i))
@@ -690,7 +809,7 @@ func penalties(i: int) -> void:
 			"HIMMLER":
 				add_susp(i, 1)
 			"GOERING":
-				var src := item_sources(i, "ANY", false)
+				var src := item_sources(i, "ANY", false, false, true)
 				if src.size() > 0:
 					var k = await ch.choose(i, "Penalità di Goering: scegli 1 oggetto da scartare.", src)
 					use_source(src[k])
@@ -702,7 +821,7 @@ func penalties(i: int) -> void:
 func deliver_ok(i: int) -> Array:
 	var sp: String = P(i).space
 	var d: Array = BOData.SPACES[sp].deliver
-	if d.is_empty() or s.board_items.has(sp):
+	if d.is_empty() or s.board_items.has(sp) or kk_blocked(sp):
 		return []
 	match d[3]:
 		"deputy":
@@ -741,7 +860,13 @@ func act_card_playable(i: int, cid: String) -> bool:
 		"INFO_VITALE":
 			return s.cdiscard.size() > 0
 		"CONTATTO":
-			return s.board_items.size() > 0
+			return contatto_spaces().size() > 0
+		"ORDINI_K":
+			return s.mods.kk and s.kk.pos != ""
+		"PROVE_D":
+			return s.mods.kk and s.kk.edisc.size() > 0
+		"AIUTARE":
+			return s.mods.or and tel_supply_colors().size() > 0 and token_free_spaces().size() > 0
 	return true
 
 func plot_req_fail(i: int, letter: String, bolt_ctx: bool = false) -> String:
@@ -749,8 +874,15 @@ func plot_req_fail(i: int, letter: String, bolt_ctx: bool = false) -> String:
 	var p := P(i)
 	if p.prison:
 		return "in prigione"
-	if p.mot < r.mot:
-		return "serve motivazione %s" % BOData.MOT_NAMES[r.mot]
+	if BOData.CONSPIRATORS[p.cid].get("no_plots", false):
+		return "%s non può tentare complotti" % cname(i)
+	if s.mods.ck and s.ck.circle.is_empty():
+		return "serve almeno 1 alleato reclutato nel Circolo di Kreisau"
+	var need_mot: int = r.mot
+	if s.mods.ck and s.ck.circle.size() == 1:
+		need_mot = 4
+	if p.mot < need_mot:
+		return "serve motivazione %s" % BOData.MOT_NAMES[need_mot]
 	if r.get("bolt", false) and not bolt_ctx:
 		return "solo subito dopo che un evento ha mosso Hitler"
 	if r.has("stage_min") and s.stage < r.stage_min:
@@ -799,13 +931,19 @@ func ability_actions(i: int) -> Array:
 			if P(i).items.size() > 0:
 				r.append({"id": "ability", "key": "canaris", "label": "Capacità: scarta oggetto, -1 sospetto"})
 		"tresckow":
-			if s.board_items.has(P(i).space) and not s.board_items[P(i).space].rev:
+			if unrevealed_idx(P(i).space) >= 0 and not kk_blocked(P(i).space):
 				r.append({"id": "ability", "key": "tresckow", "label": "Capacità: raccogli oggetto coperto"})
 		"schacht":
 			if free_list().size() > 1 and (P(i).items.size() > 0 or P(i).dossier.size() > 0):
 				r.append({"id": "ability", "key": "schacht", "label": "Capacità: cedi carta/oggetto"})
 		"freytag":
 			r.append({"id": "ability", "key": "freytag", "label": "Capacità: cerca complotto/illegale"})
+		"libertas":
+			var here := players_in(P(i).space).filter(func(j): return P(j).mot < mot_cap(j))
+			if here.size() > 0:
+				r.append({"id": "ability", "key": "libertas_mot", "label": "Capacità: +1 motivazione a un cospiratore qui"})
+			if free_list().size() > 1 and (P(i).items.size() > 0 or P(i).dossier.size() > 0):
+				r.append({"id": "ability", "key": "libertas_give", "label": "Capacità: cedi carta/oggetto (qualsiasi casella)"})
 		"dohnanyi":
 			if s.dohnanyi_stage != s.stage:
 				for c in P(i).dossier:
@@ -820,22 +958,22 @@ func available_actions(i: int) -> Array:
 	var sp: String = p.space
 	var mv: Array = []
 	for n in neighbors(sp):
-		if valid(n):
+		if valid_for(i, n):
 			mv.append(n)
 	if mv.size() > 0:
 		r.append({"id": "move", "label": "Movimento", "targets": mv})
-	if s.board_items.has(sp):
-		if s.board_items[sp].rev:
+	if not kk_blocked(sp):
+		if collectable_idx(sp).size() > 0:
 			r.append({"id": "collect", "label": "Raccogliere un oggetto"})
-		else:
+		if unrevealed_idx(sp) >= 0:
 			r.append({"id": "reveal", "label": "Rivelare un oggetto"})
 	if deliver_ok(i).size() > 0:
 		r.append({"id": "deliver", "label": "Consegnare un oggetto"})
 	if s.cdeck.size() + s.cdiscard.size() > 0:
 		r.append({"id": "dossier", "label": "Dossier (pesca 1 carta)"})
-	if not s.turn.conspired and not s.turn.no_conspire and dice_available() > 0:
+	if not s.turn.conspired and not s.turn.no_conspire and not kk_no_conspire() and dice_available() > 0:
 		r.append({"id": "conspire", "label": "Cospirare", "cost": 0})
-	if sp == "GESTAPO" and p.susp < 3 and prisoners().size() > 0:
+	if sp == "GESTAPO" and p.susp < 3 and prisoners().size() > 0 and not kk_blocked(sp):
 		r.append({"id": "release", "label": "Rilasciare"})
 	var others := players_in(sp)
 	others.erase(i)
@@ -845,7 +983,7 @@ func available_actions(i: int) -> Array:
 			if P(j).items.size() > 0 or P(j).dossier.size() > 0:
 				any = true
 		if any:
-			r.append({"id": "transfer", "label": "Trasferire"})
+			r.append({"id": "transfer", "label": "Trasferire" + (" (gratuito)" if s.turn.free_transfer else ""), "cost": 0 if s.turn.free_transfer else 1})
 	for k in range(p.dossier.size()):
 		var c: String = p.dossier[k]
 		if card_trig(c) == "act" and act_card_playable(i, c):
@@ -853,6 +991,7 @@ func available_actions(i: int) -> Array:
 		elif is_plot(c) and plot_req_fail(i, plot_letter(c)) == "":
 			r.append({"id": "plot", "idx": k, "cid": c, "label": "★ TENTA: " + cardname(c)})
 	r.append_array(ability_actions(i))
+	r.append_array(exp_actions(i))
 	# carte ⚡ giocabili in qualsiasi momento (nessun costo)
 	for j in free_list():
 		for k in range(P(j).dossier.size()):
@@ -860,7 +999,7 @@ func available_actions(i: int) -> Array:
 			if is_plot(c):
 				continue
 			var t := ctype(c)
-			if t == "COMUNICATO" or (t == "NIENTE" and not s.turn.skip_events):
+			if t == "COMUNICATO" or (t == "NIENTE" and not s.turn.skip_events) or (t == "TRASF_NASC" and placed_tels().size() > 0):
 				r.append({"id": "bolt", "pidx": j, "idx": k, "cid": c, "cost": 0, "label": "⚡ %s (%s)" % [cardname(c), cname(j)]})
 	r.append({"id": "end", "label": "Fine azioni → pesca evento", "cost": 0})
 	return r
@@ -876,13 +1015,19 @@ func do_action(i: int, a: Dictionary) -> bool:
 				return false
 			move_consp(i, dest)
 		"collect":
-			var it = s.board_items[sp]
-			s.board_items.erase(sp)
-			p.items.append(it.t)
-			log_msg("%s raccoglie l'oggetto %s a %s." % [cname(i), BOData.ITEM_NAMES[it.t], spname(sp)])
+			var idxs := collectable_idx(sp)
+			var k: int = idxs[0]
+			if idxs.size() > 1:
+				var o: Array = []
+				for x in idxs:
+					o.append({"label": BOData.ITEM_NAMES[s.board_items[sp][x].t], "img": item_img(s.board_items[sp][x].t)})
+				var c = await ch.choose(i, "Quale oggetto raccogli?", o, {"cancel": true})
+				if c < 0:
+					return false
+				k = idxs[c]
+			await take_tile(i, sp, k)
 		"reveal":
-			s.board_items[sp].rev = true
-			log_msg("%s rivela l'oggetto a %s: %s." % [cname(i), spname(sp), BOData.ITEM_NAMES[s.board_items[sp].t]])
+			await reveal_tile(sp, unrevealed_idx(sp), i)
 		"deliver":
 			return await act_deliver(i)
 		"dossier":
@@ -903,6 +1048,8 @@ func do_action(i: int, a: Dictionary) -> bool:
 			await attempt_plot(i, a.idx)
 		"ability":
 			return await use_ability(i, a.key)
+		"exp":
+			return await do_exp_action(i, a)
 		"bolt":
 			var j: int = a.pidx
 			var cid: String = P(j).dossier[a.idx]
@@ -936,6 +1083,23 @@ func do_action(i: int, a: Dictionary) -> bool:
 				s.cdiscard.append(cid)
 				s.turn.skip_events = true
 				log_msg("%s gioca Niente di Nuovo: in questo turno non si pescano carte evento." % cname(j))
+			elif t == "TRASF_NASC":
+				var tels := placed_tels()
+				var from = await ch.choose_space(j, "Trasferire il Nascondiglio: scegli la telescrivente da spostare", tels, true)
+				if from == "":
+					return false
+				var dests := token_free_spaces()
+				if dests.is_empty():
+					return false
+				var dest = await ch.choose_space(j, "Scegli la casella in cui spostarla", dests, true)
+				if dest == "":
+					return false
+				P(j).dossier.remove_at(a.idx)
+				s.cdiscard.append(cid)
+				var col: String = s.orr.tok[from]
+				s.orr.tok.erase(from)
+				s.orr.tok[dest] = col
+				log_msg("%s sposta la telescrivente %s da %s a %s." % [cname(j), BOData.TEL_NAMES[col], spname(from), spname(dest)])
 	upd()
 	return true
 
@@ -1019,13 +1183,25 @@ func act_conspire(i: int) -> bool:
 	var opts: Array = []
 	for n in range(1, maxd + 1):
 		opts.append("%d dad%s (%d azion%s)" % [n, "o" if n == 1 else "i", n, "e" if n == 1 else "i"])
+	var mier: bool = s.mods.ck and ally_ready("mierendorff") and s.turn.actions >= 3 and dice_available() >= 6
+	if mier:
+		opts.append("6 dadi con Carlo Mierendorff (3 azioni, alleato monouso)")
 	var k = await ch.choose(i, "Cospirare: quanti dadi vuoi tirare? (ogni dado costa 1 azione)", opts, {"cancel": true})
 	if k < 0:
 		return false
 	var n: int = k + 1
-	s.turn.actions -= n
+	var cost: int = n
+	if mier and k == opts.size() - 1:
+		use_ally("mierendorff")
+		n = 6
+		cost = 3
+	s.turn.actions -= cost
 	s.turn.conspired = true
-	var r := roll(n)
+	return await conspire_roll(i, n)
+
+## Tiro dell'azione Cospirare (anche gratuita, per le missioni).
+func conspire_roll(i: int, n: int) -> bool:
+	var r := roll_by(i, n)
 	if s.surveil == i:
 		r.append("E")
 		s.surveil = -1
@@ -1036,6 +1212,11 @@ func act_conspire(i: int) -> bool:
 		log_msg("Equipaggiamento Difettoso: un risultato ⊕ viene ignorato.")
 	log_msg("%s cospira: %s." % [cname(i), dice_txt(r)])
 	await ch.notify("%s cospira" % cname(i), {"dice": r})
+	if ab_on(i, "erika") and "E" in r:
+		log_msg("Erika von Tresckow ignora tutte le aquile.")
+		r = r.filter(func(f): return f != "E")
+	if "E" in r and s.mods.ck and ally_ready("reichwein"):
+		r = await reichwein_offer(i, r)
 	var eagles := r.count("E")
 	var targets := r.count("T")
 	var nums := 0
@@ -1062,19 +1243,22 @@ func act_conspire(i: int) -> bool:
 			log_msg("L'indicatore del Dissenso non è utilizzabile.")
 		else:
 			await add_dissent(targets)
-	if nums > 0:
+	if nums > 0 and i == s.active:
 		s.turn.actions += nums
 		log_msg("%s ottiene %d azioni." % [cname(i), nums])
 	upd()
 	return true
 
 func act_release(i: int) -> void:
-	var r := roll(1)
+	var f := roll1_by(i)
+	var r: Array = [f] if f != "" else []
 	if s.surveil == i:
 		r.append("E")
 		s.surveil = -1
 	log_msg("%s tenta di far rilasciare un prigioniero: %s." % [cname(i), dice_txt(r)])
 	await ch.notify("Rilasciare", {"dice": r})
+	if r.is_empty():
+		return
 	if "E" in r:
 		log_msg("Troppe domande sospette!")
 		arrest(i)
@@ -1141,7 +1325,7 @@ func use_ability(i: int, key: String) -> bool:
 			while top.size() > 0:
 				var opts: Array = []
 				for e in top:
-					opts.append({"label": BOData.EVENTS[e].name, "img": eimg(e)})
+					opts.append({"label": EV[e].name, "img": eimg(e)})
 				var k: int = 0
 				if top.size() > 1:
 					k = await ch.choose(i, "Kordt: scegli la carta da mettere in posizione %d dalla cima" % (order.size() + 1), opts)
@@ -1151,7 +1335,7 @@ func use_ability(i: int, key: String) -> bool:
 				d.push_front(order[k])
 			log_msg("Kordt riordina le prime %d carte del mazzo dello stadio %d." % [order.size(), s.stage])
 		"olbricht_move":
-			var t := spaces_within(P(i).space, 2)
+			var t := spaces_within(P(i).space, 2, i)
 			var dest = await ch.choose_space(i, "Olbricht: muoviti fino a 2 caselle", t, true)
 			if dest == "":
 				return false
@@ -1199,10 +1383,29 @@ func use_ability(i: int, key: String) -> bool:
 			await choose_and_apply(i, "Canaris: -1 sospetto a quale cospiratore?", free_list(), func(j): add_susp(j, -1))
 		"tresckow":
 			var sp: String = P(i).space
-			var it = s.board_items[sp]
-			s.board_items.erase(sp)
-			P(i).items.append(it.t)
-			log_msg("Tresckow raccoglie l'oggetto coperto a %s: %s." % [spname(sp), BOData.ITEM_NAMES[it.t]])
+			log_msg("Tresckow raccoglie un oggetto coperto a %s." % spname(sp))
+			await take_tile(i, sp, unrevealed_idx(sp))
+		"libertas_mot":
+			var here := players_in(P(i).space).filter(func(j): return P(j).mot < mot_cap(j))
+			if here.is_empty():
+				return false
+			await choose_and_apply(i, "Libertas: +1 motivazione a quale cospiratore?", here, func(j): add_mot(j, 1))
+		"libertas_give":
+			var oth := free_list()
+			oth.erase(i)
+			var opts: Array = []
+			var codes: Array = []
+			for j in oth:
+				for k in range(P(i).items.size()):
+					opts.append({"label": "Dai a %s: %s" % [cname(j), BOData.ITEM_NAMES[P(i).items[k]]], "img": item_img(P(i).items[k])})
+					codes.append([j, "item", k])
+				for k in range(P(i).dossier.size()):
+					opts.append({"label": "Dai a %s: %s" % [cname(j), cardname(P(i).dossier[k])], "img": cimg(P(i).dossier[k])})
+					codes.append([j, "card", k])
+			var k = await ch.choose(i, "Libertas: cosa vuoi cedere?", opts, {"cancel": true})
+			if k < 0:
+				return false
+			move_thing(i, codes[k][0], codes[k][1], codes[k][2])
 		"schacht":
 			var oth := free_list()
 			oth.erase(i)
@@ -1281,7 +1484,7 @@ func card_effect(i: int, t: String, mult: int) -> void:
 			"VOLO":
 				var t2: Array = []
 				for sp in BOData.SPACES:
-					if valid(sp) and sp != P(i).space:
+					if valid_for(i, sp) and sp != P(i).space:
 						t2.append(sp)
 				var dest = await ch.choose_space(i, "Volo Aereo: scegli una casella valida", t2, false)
 				move_consp(i, dest)
@@ -1356,14 +1559,42 @@ func card_effect(i: int, t: String, mult: int) -> void:
 				shuffle(s.cdeck)
 				gain_cards(i, 1)
 			"CONTATTO":
-				var sps: Array = s.board_items.keys()
+				var sps: Array = contatto_spaces()
 				if sps.is_empty():
 					return
 				var dest = await ch.choose_space(i, "Contatto Distante: scegli la casella da cui prendere l'oggetto", sps, false)
-				var it = s.board_items[dest]
-				s.board_items.erase(dest)
-				P(i).items.append(it.t)
-				log_msg("%s ottiene l'oggetto %s da %s." % [cname(i), BOData.ITEM_NAMES[it.t], spname(dest)])
+				var idxs: Array = []
+				for x in range(s.board_items[dest].size()):
+					if s.board_items[dest][x].t != "ALLEATO" or not s.board_items[dest][x].rev:
+						idxs.append(x)
+				var k: int = idxs[0]
+				if idxs.size() > 1:
+					var o: Array = []
+					for x in idxs:
+						var tl = s.board_items[dest][x]
+						o.append({"label": BOData.ITEM_NAMES[tl.t] if tl.rev else "Oggetto coperto", "img": item_img(tl.t if tl.rev else "BACK")})
+					k = idxs[await ch.choose(i, "Quale oggetto prendi?", o)]
+				log_msg("%s usa Contatto Distante su %s." % [cname(i), spname(dest)])
+				await take_tile(i, dest, k)
+			"ORDINI_K":
+				var t3: Array = []
+				for sp in BOData.SPACES:
+					if BOData.SPACES[sp].stage <= s.stage and sp != s.kk.pos:
+						t3.append(sp)
+				var dest = await ch.choose_space(i, "Ordini Contraffatti: dove mandare Horst Kopkow?", t3, false)
+				kopkow_move_to(dest)
+			"PROVE_D":
+				enc_reshuffle_bottom()
+			"AIUTARE":
+				var cols := tel_supply_colors()
+				var o: Array = []
+				for c in cols:
+					o.append({"label": "Telescrivente " + BOData.TEL_NAMES[c], "img": "res://assets/res/tokens/%s.png" % BOData.TEL_IMG[c]})
+				var c2: String = cols[0]
+				if cols.size() > 1:
+					c2 = cols[await ch.choose(i, "Aiutare la Resistenza: quale telescrivente collochi?", o)]
+				var dest = await ch.choose_space(i, "Scegli la casella in cui collocarla", token_free_spaces(), false)
+				await place_token(i, dest, c2)
 			"COPERTURA":
 				for j in players_in(P(i).space):
 					add_susp(j, -1)
@@ -1391,7 +1622,7 @@ func peek_events(n: int) -> Array:
 	return r
 
 func return_event_top(e: String) -> void:
-	s.decks[BOData.EVENTS[e].stage].push_front(e)
+	s.decks[EV[e].stage].push_front(e)
 
 func comunicazione(i: int) -> void:
 	var cards := peek_events(2)
@@ -1399,33 +1630,33 @@ func comunicazione(i: int) -> void:
 		return
 	var opts: Array = []
 	if cards.size() == 1:
-		opts = [{"label": "Rimuovi dalla partita: " + BOData.EVENTS[cards[0]].name, "img": eimg(cards[0])},
-			{"label": "Rimettila in cima: " + BOData.EVENTS[cards[0]].name, "img": eimg(cards[0])}]
+		opts = [{"label": "Rimuovi dalla partita: " + EV[cards[0]].name, "img": eimg(cards[0])},
+			{"label": "Rimettila in cima: " + EV[cards[0]].name, "img": eimg(cards[0])}]
 		var k = await ch.choose(i, "Comunicazione Decifrata", opts)
 		if k == 0:
 			s.ev_removed.append(cards[0])
-			log_msg("Evento rimosso dalla partita: %s." % BOData.EVENTS[cards[0]].name)
+			log_msg("Evento rimosso dalla partita: %s." % EV[cards[0]].name)
 		else:
 			return_event_top(cards[0])
 		return
 	var a: String = cards[0]
 	var b: String = cards[1]
 	opts = [
-		{"label": "Rimuovi %s, rimetti in cima %s" % [BOData.EVENTS[a].name, BOData.EVENTS[b].name], "img": eimg(a)},
-		{"label": "Rimuovi %s, rimetti in cima %s" % [BOData.EVENTS[b].name, BOData.EVENTS[a].name], "img": eimg(b)},
-		{"label": "Rimetti entrambe: prima %s, poi %s" % [BOData.EVENTS[a].name, BOData.EVENTS[b].name], "img": eimg(a)},
-		{"label": "Rimetti entrambe: prima %s, poi %s" % [BOData.EVENTS[b].name, BOData.EVENTS[a].name], "img": eimg(b)},
+		{"label": "Rimuovi %s, rimetti in cima %s" % [EV[a].name, EV[b].name], "img": eimg(a)},
+		{"label": "Rimuovi %s, rimetti in cima %s" % [EV[b].name, EV[a].name], "img": eimg(b)},
+		{"label": "Rimetti entrambe: prima %s, poi %s" % [EV[a].name, EV[b].name], "img": eimg(a)},
+		{"label": "Rimetti entrambe: prima %s, poi %s" % [EV[b].name, EV[a].name], "img": eimg(b)},
 	]
-	var k = await ch.choose(i, "Comunicazione Decifrata: le prossime carte evento sono %s e %s" % [BOData.EVENTS[a].name, BOData.EVENTS[b].name], opts, {"imgs": [eimg(a), eimg(b)]})
+	var k = await ch.choose(i, "Comunicazione Decifrata: le prossime carte evento sono %s e %s" % [EV[a].name, EV[b].name], opts, {"imgs": [eimg(a), eimg(b)]})
 	match k:
 		0:
 			s.ev_removed.append(a)
 			return_event_top(b)
-			log_msg("Evento rimosso dalla partita: %s." % BOData.EVENTS[a].name)
+			log_msg("Evento rimosso dalla partita: %s." % EV[a].name)
 		1:
 			s.ev_removed.append(b)
 			return_event_top(a)
-			log_msg("Evento rimosso dalla partita: %s." % BOData.EVENTS[b].name)
+			log_msg("Evento rimosso dalla partita: %s." % EV[b].name)
 		2:
 			return_event_top(b)
 			return_event_top(a)
@@ -1468,6 +1699,9 @@ func attempt_plot(i: int, idx: int) -> void:
 	var pool := 1
 	var cancel_e := 0
 	var sp: String = P(i).space
+	if s.mods.or and s.orr.done.size() > 0:
+		pool += s.orr.done.size()
+		log_msg("Missioni completate dell'Orchestra Rossa: +%d dad%s." % [s.orr.done.size(), "o" if s.orr.done.size() == 1 else "i"])
 	for opt in pl.opt:
 		match opt[0]:
 			"aff":
@@ -1532,7 +1766,14 @@ func attempt_plot(i: int, idx: int) -> void:
 	var need: int = s.ms
 	var limit: int = BOData.SUSP_EAGLES[P(i).susp]
 	var mod := event_mod()
+	var st_t := 0
+	if s.mods.ck:
+		var stt = BOData.KREISAU_STATUS[mini(s.ck.circle.size(), 5)]
+		st_t = stt[0]
+		mod += stt[1]
 	var info := "Servono %d ⊕ (Supporto Militare). Il complotto fallisce e viene scoperto con %d o più aquile (sospetto %s)." % [need, limit, BOData.SUSP_NAMES[P(i).susp]]
+	if s.mods.ck:
+		info += "\nCircolo di Kreisau: " + BOData.KREISAU_STATUS[mini(s.ck.circle.size(), 5)][2]
 	if mod != 0:
 		info += "\nEvento attuale: %s %d aquil%s." % [("aggiunge" if mod > 0 else "ignora"), absi(mod), "a" if absi(mod) == 1 else "e"]
 	if cancel_e > 0:
@@ -1542,7 +1783,7 @@ func attempt_plot(i: int, idx: int) -> void:
 		opts.append("Tira %d dad%s" % [n, "o" if n == 1 else "i"])
 	var k = await ch.choose(i, "Riserva finale: %d dadi.\n%s\nQuanti dadi vuoi tirare?" % [pool, info], opts)
 	var n: int = pool - k
-	var r := roll(n)
+	var r := roll_by(i, n)
 	if s.surveil == i:
 		r.append("E")
 		s.surveil = -1
@@ -1553,7 +1794,7 @@ func attempt_plot(i: int, idx: int) -> void:
 		log_msg("Equipaggiamento Difettoso: un risultato ⊕ viene ignorato.")
 	log_msg("Tiro del complotto: %s." % dice_txt(r))
 	await ch.notify("Tentativo di complotto – " + pl.name, {"dice": r, "text": info})
-	var extra_t := 0
+	var extra_t := st_t
 	var ignore_e := 0
 	# reazioni ⚡
 	while not s.over:
@@ -1568,12 +1809,33 @@ func attempt_plot(i: int, idx: int) -> void:
 						continue
 					o.append({"label": "%s gioca %s" % [cname(j), BOData.CCARDS[t].name], "img": cimg(P(j).dossier[find_card(j, t)])})
 					codes.append([j, t])
+		if s.mods.ck and r.count("E") + mod - cancel_e - ignore_e > 0:
+			for ak in ["reichwein", "rosch"]:
+				if ally_ready(ak):
+					o.append({"label": "Alleato: %s" % ally_def(ak).name, "img": ally_img(ak)})
+					codes.append([-2, ak])
 		if codes.size() == 1:
 			break
-		var cur := "Risultato: %s  (+%d ⊕, -%d aquile)" % [dice_txt(r), extra_t, ignore_e]
+		var cur := "Risultato: %s  (%+d ⊕, -%d aquile)" % [dice_txt(r), extra_t, ignore_e]
 		var c = await ch.choose(i, cur + "\nVuoi giocare una carta ⚡?", o, {"dice": r})
-		if codes[c][0] < 0:
+		if codes[c][0] == -1:
 			break
+		if codes[c][0] == -2:
+			var ak: String = codes[c][1]
+			use_ally(ak)
+			if ak == "rosch":
+				ignore_e += 99
+				log_msg("Augustin Rösch: tutte le aquile del complotto sono ignorate.")
+			else:
+				var ei: int = r.find("E")
+				var faces := ["1", "2", "3", "T"]
+				var fo: Array = []
+				for f in faces:
+					fo.append(FACE_TXT[f])
+				var fc = await ch.choose(i, "Rosemarie Reichwein: su quale faccia giri il dado con l'aquila?", fo, {"dice": r})
+				r[ei] = faces[fc]
+				log_msg("Rosemarie Reichwein gira un'aquila su %s." % FACE_TXT[faces[fc]])
+			continue
 		var j: int = codes[c][0]
 		var t: String = codes[c][1]
 		discard_card(j, find_card(j, t))
@@ -1593,7 +1855,7 @@ func attempt_plot(i: int, idx: int) -> void:
 				extra_t += 1
 				log_msg("Informatore di Alto Rango: +1 ⊕.")
 	var eagles := maxi(0, r.count("E") + mod - cancel_e - ignore_e)
-	var targets := r.count("T") + extra_t
+	var targets := maxi(0, r.count("T") + extra_t)
 	log_msg("Aquile effettive: %d (limite %d). Bersagli: %d (servono %d)." % [eagles, limit, targets, need])
 	s.phase = "actions"
 	if eagles >= limit:
@@ -1615,9 +1877,9 @@ func attempt_plot(i: int, idx: int) -> void:
 	upd()
 
 func event_mod() -> int:
-	if s.current == "":
+	if s.current == "" or s.ev_ignored:
 		return 0
-	return BOData.EVENTS[s.current].get("mod", 0)
+	return EV[s.current].get("mod", 0)
 
 ## Dopo che un evento ha mosso Hitler: possibilità di tentare i complotti C e D.
 func offer_event_plots() -> void:
@@ -1647,6 +1909,11 @@ func draw_events_step(i: int) -> void:
 		var j: int = await offer_bolt("NIENTE", "Stai per pescare una carta evento.")
 		if j >= 0:
 			s.turn.skip_events = true
+	if not s.turn.skip_events and s.mods.ck and ally_ready("haubach"):
+		var k = await ch.choose(s.active, "Stai per pescare una carta evento. Vuoi usare l'alleato Theodor Haubach per non risolverla?", ["No", "Sì, usa Theodor Haubach"])
+		if k == 1:
+			use_ally("haubach")
+			s.turn.skip_events = true
 	if s.turn.skip_events:
 		log_msg("Niente di Nuovo: nessuna carta evento in questo turno.")
 		return
@@ -1668,13 +1935,16 @@ func draw_event() -> void:
 	if st < 0:
 		lose("Non è possibile pescare una carta evento: la guerra prosegue senza che Hitler sia stato fermato.")
 		return
+	if st >= 2 and s.mods.kk and s.kk.pos == "":
+		log_msg("La caccia ha inizio: Horst Kopkow arriva al QG Gestapo.")
+		kopkow_move_to("GESTAPO")
 	var card: String = s.decks[st].pop_front()
 	await place_event(card)
 
 func place_event(card: String) -> void:
-	var ev = BOData.EVENTS[card]
+	var ev = EV[card]
 	if s.current != "":
-		if BOData.EVENTS[s.current].kind == "key":
+		if EV[s.current].kind == "key":
 			s.key = s.current
 		else:
 			s.ev_discard.append(s.current)
@@ -1685,6 +1955,12 @@ func place_event(card: String) -> void:
 			s.key = ""
 		s.stage = ev.stage
 		log_msg("═══ Inizia lo STADIO %d ═══" % s.stage)
+		if s.mods.kk and s.kk.nocons_stage > 0:
+			s.kk.nocons_stage = 0
+			log_msg("Eccesso di Cautela: Cospirare torna disponibile.")
+		if s.stage >= 7 and s.mods.or and s.orr.perm != "":
+			log_msg("Stadio 7: la telescrivente permanente viene rimossa da %s." % spname(s.orr.perm))
+			s.orr.perm = ""
 		if s.stage == 7:
 			log_msg("Stadio 7: il Reich perde i territori remoti.")
 			await relocate_no7(7)
@@ -1692,13 +1968,21 @@ func place_event(card: String) -> void:
 	log_msg("Evento: %s (Stadio %d)." % [ev.name, ev.stage])
 	upd()
 	await ch.notify("Carta evento: " + ev.name, {"img": eimg(card), "event": card})
-	if ev.kind == "imp" and s.key != "" and BOData.EVENTS[s.key].stage == ev.stage:
+	if ev.kind == "imp" and s.key != "" and EV[s.key].stage == ev.stage:
 		log_msg("L'evento chiave di questo stadio è in gioco: %s viene ignorato." % ev.name)
 		s.ev_discard.append(card)
 		s.current = ""
 		await draw_event()
 		return
 	s.hitler_moved = false
+	s.ev_ignored = false
+	if ev.kind != "raid" and ab_on(s.active, "mildred"):
+		var mk = await ch.choose(s.active, "Mildred Fish-Harnack: vuoi risolvere gli effetti di «%s» o ignorarli?" % ev.name, ["Risolvi l'evento", "Ignora gli effetti"], {"imgs": [eimg(card)]})
+		if mk == 1:
+			s.ev_ignored = true
+			log_msg("Mildred Fish-Harnack ignora gli effetti di %s." % ev.name)
+			upd()
+			return
 	match ev.kind:
 		"raid":
 			await gestapo_raid()
@@ -1727,9 +2011,9 @@ func single_in(sp: String) -> int:
 	return r[0] if r.size() == 1 else -1
 
 func reveal_item(sp: String) -> void:
-	if s.board_items.has(sp) and not s.board_items[sp].rev:
-		s.board_items[sp].rev = true
-		log_msg("Rivelato l'oggetto a %s: %s." % [spname(sp), BOData.ITEM_NAMES[s.board_items[sp].t]])
+	var k := unrevealed_idx(sp)
+	if k >= 0:
+		await reveal_tile(sp, k, -1)
 
 func all_mot(d: int) -> void:
 	for j in free_list():
@@ -1835,7 +2119,7 @@ func resolve_event(fx: String) -> void:
 		"propaganda":
 			move_leader("BORMANN", "MONACO")
 			move_leader("GOEBBELS", "MONACO")
-			reveal_item("MONACO")
+			await reveal_item("MONACO")
 		"visita_hess":
 			var sp = await ev_move_nearest("HESS")
 			var j := single_in(sp)
@@ -1876,15 +2160,15 @@ func resolve_event(fx: String) -> void:
 		"cecoslovacchia":
 			add_ms(1)
 			await ev_move_hitler("VIENNA")
-			reveal_item("VIENNA")
+			await reveal_item("VIENNA")
 		"ebrei_mirino":
 			all_mot(1)
 			move_leader("HIMMLER", "VARSAVIA")
-			reveal_item("VARSAVIA")
+			await reveal_item("VARSAVIA")
 		"bombe_londra":
 			add_ms(1)
 			move_leader("HESS", "PRAGA")
-			reveal_item("PRAGA")
+			await reveal_item("PRAGA")
 		"caduta_parigi":
 			if s.ms < 5:
 				log_msg("Supporto Militare portato a 5.")
@@ -1918,7 +2202,7 @@ func resolve_event(fx: String) -> void:
 		"assume_comando":
 			add_ms(-1)
 			await ev_move_hitler("WOLFSSCHANZE")
-			reveal_item("WOLFSSCHANZE")
+			await reveal_item("WOLFSSCHANZE")
 		"visita_goebbels4":
 			await ev_move_nearest("GOEBBELS")
 			aff_mot("Civile", -1)
@@ -1932,7 +2216,7 @@ func resolve_event(fx: String) -> void:
 			await ev_move_hitler("ANLAGE_SUD")
 			for d in dep:
 				move_leader(d, "ANLAGE_SUD")
-			reveal_item("ANLAGE_SUD")
+			await reveal_item("ANLAGE_SUD")
 		"visita_himmler4":
 			await ev_move_nearest("HIMMLER")
 			aff_mot("Wehrmacht", -1)
@@ -1963,7 +2247,7 @@ func resolve_event(fx: String) -> void:
 		"lebensraum":
 			all_mot(1)
 			move_leader("HIMMLER", "WASSERBURG")
-			reveal_item("WASSERBURG")
+			await reveal_item("WASSERBURG")
 		"casablanca":
 			all_mot(-1)
 			for j in free_list():
@@ -2030,10 +2314,31 @@ func resolve_event(fx: String) -> void:
 		"anzio":
 			s.anzio = true
 			log_msg("I cospiratori Abwehr non possono più usare la propria capacità.")
+		_:
+			await resolve_exp_event(fx)
 	upd()
 
-func gestapo_raid() -> void:
+func gestapo_raid(is_tile: bool = false) -> void:
 	log_msg("🚨 RAID DELLA GESTAPO!")
+	if s.mods.or and s.orr.skip_raid > 0:
+		s.orr.skip_raid -= 1
+		log_msg("Autorizzazione di Sicurezza: questo Raid viene ignorato.")
+		return
+	if s.mods.ck and ally_ready("myorck"):
+		var mk = await ch.choose(s.active, "Raid della Gestapo! Vuoi usare l'alleato Marion Yorck per ignorarlo?", ["No", "Sì, ignora il Raid"])
+		if mk == 1:
+			use_ally("myorck")
+			log_msg("Marion Yorck: il Raid viene ignorato.")
+			return
+	if s.mods.or:
+		or_on_raid()
+	if s.mods.kk and s.kk.fiato.size() > 0:
+		for j in s.kk.fiato:
+			if not P(j).prison and P(j).susp >= 2:
+				log_msg("Fiato sul Collo: %s viene arrestato." % cname(j))
+				arrest(j)
+		s.kk.fiato = []
+		s.kk.edisc.append(16)
 	for j in free_list():
 		if P(j).susp >= 3:
 			arrest(j)
@@ -2044,7 +2349,7 @@ func gestapo_raid() -> void:
 			continue
 		var ill: Array = []
 		for c in P(j).dossier:
-			if is_illegal(c):
+			if is_illegal_raid(c):
 				ill.append(c)
 		for c in ill:
 			if P(j).susp >= 3:
@@ -2065,6 +2370,12 @@ func gestapo_raid() -> void:
 # Interrogatorio
 # =====================================================================
 func interrogation(i: int) -> void:
+	if s.mods.ck and ally_ready("lukaschek"):
+		var lk = await ch.choose(i, "%s è in prigione. Vuoi usare l'alleato Hans Lukaschek per essere rilasciato invece di risolvere la carta interrogatorio?" % cname(i), ["No", "Sì, usa Hans Lukaschek"])
+		if lk == 1:
+			use_ally("lukaschek")
+			release(i, 2)
+			return
 	if s.ideck.is_empty():
 		return
 	var k: int = s.ideck.pop_front()
@@ -2198,7 +2509,7 @@ func can_op(r: int, op: Array) -> bool:
 			return not s.dissent_off
 		"reshuffle_raid":
 			for e in s.ev_discard:
-				if BOData.EVENTS[e].kind == "raid" and BOData.EVENTS[e].stage == s.stage:
+				if EV[e].kind == "raid" and EV[e].stage == s.stage:
 					return true
 			return false
 		"board_items":
@@ -2227,8 +2538,10 @@ func count_plots(j: int) -> int:
 func board_item_cands(revealed: bool) -> Array:
 	var r: Array = []
 	for sp in s.board_items:
-		if s.board_items[sp].rev == revealed:
-			r.append(sp)
+		for tl in s.board_items[sp]:
+			if tl.rev == revealed:
+				r.append(sp)
+				break
 	return r
 
 func nearest_deputies(sp: String) -> Array:
@@ -2422,7 +2735,7 @@ func exec_op(r: int, op: Array) -> void:
 			log_msg("Popolazione Zittita: l'indicatore del Dissenso non può più essere usato.")
 		"reshuffle_raid":
 			for e in s.ev_discard:
-				if BOData.EVENTS[e].kind == "raid" and BOData.EVENTS[e].stage == s.stage:
+				if EV[e].kind == "raid" and EV[e].stage == s.stage:
 					s.ev_discard.erase(e)
 					s.decks[s.stage].append(e)
 					shuffle(s.decks[s.stage])
@@ -2441,8 +2754,10 @@ func exec_op(r: int, op: Array) -> void:
 				var sp: String = c[0]
 				if c.size() > 1:
 					sp = await ch.choose_space(r, "Scegli l'oggetto da rimuovere dal tabellone (%d di %d)" % [n + 1, op[1]], c, false)
-				s.item_discard.append(s.board_items[sp].t)
-				s.board_items.erase(sp)
+				for x in range(s.board_items[sp].size()):
+					if s.board_items[sp][x].rev == op[2]:
+						remove_tile(sp, x, true)
+						break
 				log_msg("Rimosso l'oggetto da %s." % spname(sp))
 		"ordini_berlino":
 			if fr.is_empty():
@@ -2500,7 +2815,14 @@ func plot_preview(i: int, letter: String, bolt_ctx: bool = false) -> Dictionary:
 	var r = pl.req
 	var p := P(i)
 	var req: Array = []
-	req.append(["Motivazione %s (ora %s)" % [BOData.MOT_NAMES[r.mot], BOData.MOT_NAMES[p.mot]], p.mot >= r.mot])
+	var need_mot: int = r.mot
+	if BOData.CONSPIRATORS[p.cid].get("no_plots", false):
+		req.append(["%s non può tentare complotti" % cname(i), false])
+	if s.mods.ck:
+		req.append(["Almeno 1 alleato nel Circolo di Kreisau (%d)" % s.ck.circle.size(), s.ck.circle.size() > 0])
+		if s.ck.circle.size() == 1:
+			need_mot = 4
+	req.append(["Motivazione %s (ora %s)" % [BOData.MOT_NAMES[need_mot], BOData.MOT_NAMES[p.mot]], p.mot >= need_mot])
 	if r.get("bolt", false):
 		req.append(["Subito dopo che un evento ha mosso Hitler", bolt_ctx])
 	if r.has("stage_min"):
@@ -2526,6 +2848,17 @@ func plot_preview(i: int, letter: String, bolt_ctx: bool = false) -> Dictionary:
 	var dice := 1
 	var cancel := 0
 	var opt: Array = []
+	var extra_txt: Array = []
+	if s.mods.or and s.orr.done.size() > 0:
+		dice += s.orr.done.size()
+		extra_txt.append("+%d dad%s per le missioni completate" % [s.orr.done.size(), "o" if s.orr.done.size() == 1 else "i"])
+	var kmod_t := 0
+	var kmod_e := 0
+	if s.mods.ck:
+		var stt = BOData.KREISAU_STATUS[mini(s.ck.circle.size(), 5)]
+		kmod_t = stt[0]
+		kmod_e = stt[1]
+		extra_txt.append("Circolo di Kreisau: " + stt[2])
 	var sp: String = p.space
 	for o in pl.opt:
 		match o[0]:
@@ -2578,4 +2911,1258 @@ func plot_preview(i: int, letter: String, bolt_ctx: bool = false) -> Dictionary:
 		if ab_on(j, "helldorf") and is_berlin(sp):
 			extra.append("Helldorf (+2 dadi)")
 	return {"ok": ok_all, "req": req, "opt": opt, "dice": mini(dice, dice_available()), "cancel": cancel,
-		"need": s.ms, "limit": BOData.SUSP_EAGLES[p.susp], "mod": event_mod(), "extra": extra, "name": pl.name}
+		"need": s.ms - kmod_t, "limit": BOData.SUSP_EAGLES[p.susp], "mod": event_mod() + kmod_e, "extra": extra, "name": pl.name, "notes": extra_txt}
+
+# #####################################################################
+# ESPANSIONE «LA RESISTENZA»
+# #####################################################################
+func exp_setup() -> void:
+	var md: Array = []
+	for k in range(BOData.MISSIONS.size()):
+		md.append(k)
+	shuffle(md)
+	s.orr = {"tok": {}, "perm": "", "sup": {"A": 2, "R": 2, "G": 2, "V": 5},
+		"act": {"A": -1, "R": -1, "G": -1}, "comb": {"A": -1, "R": -1, "G": -1},
+		"mdeck": md, "mdisc": [], "done": [], "prove": 2, "comb_sup": 2,
+		"skip_raid": 0, "no_pen": -1, "dossier_bonus": 0, "hideout": "", "hideout_have": false,
+		"flagged": {}, "pending": [], "checking": false}
+	var ed: Array = []
+	for k in range(BOData.ENCOUNTERS.size()):
+		ed.append(k)
+	shuffle(ed)
+	s.kk = {"pos": "", "edeck": ed, "edisc": [], "fiato": [], "nocons_until": -1, "nocons_stage": 0, "favore": -1}
+	var ap: Array = []
+	for k in range(BOData.ALLIES.size()):
+		ap.append(k)
+	shuffle(ap)
+	s.ck = {"apile": ap, "res": [], "circle": []}
+	if s.mods.ck:
+		for k in range(3):
+			s.ck.res.append(s.ck.apile.pop_front())
+	var names: Array = []
+	if s.mods.or:
+		names.append("Orchestra Rossa")
+	if s.mods.kk:
+		names.append("Horst Kopkow")
+	if s.mods.ck:
+		names.append("Circolo di Kreisau")
+	if names.size() > 0:
+		log_msg("Moduli de «La Resistenza»: " + ", ".join(names) + ".")
+
+func exp_turn_start(i: int) -> void:
+	if s.mods.or and s.orr.no_pen == i:
+		s.orr.no_pen = -1
+		log_msg("Contromessaggio: le penalità tornano ad applicarsi.")
+	if s.mods.kk and s.kk.nocons_until == i:
+		s.kk.nocons_until = -1
+		log_msg("Eccesso di Cautela: Cospirare torna disponibile.")
+
+## Margarethe von Oven: ogni aumento di motivazione può diventare −1 sospetto.
+func resolve_oven() -> void:
+	while s.oven_pending.size() > 0 and not s.over:
+		var j: int = s.oven_pending.pop_front()
+		var p := P(j)
+		if p.prison or p.mot >= mot_cap(j):
+			continue
+		var k := 0
+		if p.susp > susp_floor(j):
+			k = await ch.choose(j, "Margarethe von Oven può aumentare la motivazione. Cosa scegli?", ["+1 motivazione (%s → %s)" % [BOData.MOT_NAMES[p.mot], BOData.MOT_NAMES[p.mot + 1]], "−1 sospetto (%s → %s)" % [BOData.SUSP_NAMES[p.susp], BOData.SUSP_NAMES[p.susp - 1]]])
+		if k == 0:
+			log_msg("%s: motivazione %s → %s." % [cname(j), BOData.MOT_NAMES[p.mot], BOData.MOT_NAMES[p.mot + 1]])
+			p.mot += 1
+		else:
+			add_susp(j, -1)
+		upd()
+
+## Hitler o un delegato entrano in una casella: rimuovono segnalini e alleati rivelati.
+func leader_entered(sp: String) -> void:
+	if s.mods.or and s.orr.tok.has(sp):
+		var col: String = s.orr.tok[sp]
+		s.orr.tok.erase(sp)
+		s.orr.sup[col] += 1
+		log_msg("Il segnalino %s a %s viene rimosso." % [BOData.TEL_NAMES[col], spname(sp)])
+		if col != "V" and s.orr.act[col] >= 0 and tels_of(col).is_empty() and s.orr.perm == "":
+			discard_mission(col, "tutte le telescriventi %s sono state rimosse" % BOData.TEL_NAMES[col])
+	if s.mods.ck and s.board_items.has(sp):
+		var arr: Array = s.board_items[sp]
+		for x in range(arr.size() - 1, -1, -1):
+			if arr[x].t == "ALLEATO" and arr[x].rev:
+				remove_tile(sp, x, false)
+				log_msg("La tessera Alleato a %s viene rimossa dal gioco." % spname(sp))
+
+# ---------------------------------------------------------------------
+# Tessere oggetto (pile sulle caselle)
+# ---------------------------------------------------------------------
+func unrevealed_idx(sp: String) -> int:
+	if not s.board_items.has(sp):
+		return -1
+	var arr: Array = s.board_items[sp]
+	for x in range(arr.size()):
+		if not arr[x].rev:
+			return x
+	return -1
+
+func collectable_idx(sp: String) -> Array:
+	var r: Array = []
+	if not s.board_items.has(sp):
+		return r
+	var arr: Array = s.board_items[sp]
+	for x in range(arr.size()):
+		if arr[x].rev and arr[x].t != "ALLEATO":
+			r.append(x)
+	return r
+
+func remove_tile(sp: String, k: int, to_discard: bool) -> void:
+	var arr: Array = s.board_items[sp]
+	var tl = arr[k]
+	arr.remove_at(k)
+	if to_discard and (tl.t in BOData.BASE_ITEMS or tl.t == "QUALSIASI"):
+		s.item_discard.append(tl.t)
+	if arr.is_empty():
+		s.board_items.erase(sp)
+
+func contatto_spaces() -> Array:
+	var r: Array = []
+	for sp in s.board_items:
+		for tl in s.board_items[sp]:
+			if not (tl.t == "ALLEATO" and tl.rev):
+				r.append(sp)
+				break
+	return r
+
+func reveal_tile(sp: String, k: int, who: int) -> void:
+	if k < 0 or not s.board_items.has(sp):
+		return
+	var tl = s.board_items[sp][k]
+	tl.rev = true
+	if who >= 0:
+		log_msg("%s rivela l'oggetto a %s: %s." % [cname(who), spname(sp), BOData.ITEM_NAMES[tl.t]])
+	else:
+		log_msg("Rivelato l'oggetto a %s: %s." % [spname(sp), BOData.ITEM_NAMES[tl.t]])
+	if tl.t == "RAIDT":
+		remove_tile(sp, k, false)
+		await ch.notify("Tessera Raid della Gestapo!", {"img": item_img("RAIDT"), "text": "Si risolve immediatamente un Raid della Gestapo."})
+		await gestapo_raid(true)
+	upd()
+
+func take_tile(i: int, sp: String, k: int, resolve_ally: bool = false) -> void:
+	if k < 0 or not s.board_items.has(sp):
+		return
+	var tl = s.board_items[sp][k]
+	if tl.t == "ALLEATO":
+		if resolve_ally and s.ck.res.size() > 0:
+			remove_tile(sp, k, false)
+			log_msg("%s recluta un alleato da %s." % [cname(i), spname(sp)])
+			await recruit(i)
+		elif not tl.rev:
+			tl.rev = true
+			log_msg("L'oggetto a %s è un Alleato: resta sulla casella, rivelato." % spname(sp))
+		return
+	remove_tile(sp, k, false)
+	match tl.t:
+		"RAIDT":
+			log_msg("%s scopre una tessera Raid della Gestapo a %s!" % [cname(i), spname(sp)])
+			await ch.notify("Tessera Raid della Gestapo!", {"img": item_img("RAIDT"), "text": "Si risolve immediatamente un Raid della Gestapo."})
+			await gestapo_raid(true)
+		"MOTMS":
+			var o: Array = []
+			var codes: Array = []
+			if P(i).mot < mot_cap(i):
+				o.append("+1 motivazione a %s" % cname(i))
+				codes.append(0)
+			if s.ms > s.ms_start:
+				o.append("−1 Supporto Militare di Hitler")
+				codes.append(1)
+			if codes.is_empty():
+				log_msg("La tessera +1 Motivazione / −1 Supporto Militare non ha effetto.")
+			else:
+				var c = await ch.choose(i, "Tessera «+1 Motivazione o −1 Supporto Militare»: cosa scegli?", o, {"imgs": [item_img("MOTMS")]})
+				if codes[c] == 0:
+					add_mot(i, 1)
+				else:
+					add_ms(-1)
+		_:
+			P(i).items.append(tl.t)
+			log_msg("%s raccoglie l'oggetto %s a %s." % [cname(i), BOData.ITEM_NAMES[tl.t], spname(sp)])
+	upd()
+
+# ---------------------------------------------------------------------
+# Orchestra Rossa
+# ---------------------------------------------------------------------
+func tels_of(col: String) -> Array:
+	var r: Array = []
+	for sp in s.orr.tok:
+		if s.orr.tok[sp] == col:
+			r.append(sp)
+	return r
+
+func placed_tels() -> Array:
+	var r: Array = []
+	for sp in s.orr.tok:
+		if s.orr.tok[sp] != "V":
+			r.append(sp)
+	return r
+
+func tel_supply_colors() -> Array:
+	var r: Array = []
+	for c in BOData.TEL_COLORS:
+		if s.orr.sup[c] > 0:
+			r.append(c)
+	return r
+
+func token_free_spaces() -> Array:
+	var r: Array = []
+	for sp in BOData.SPACES:
+		if BOData.SPACES[sp].deliver.size() > 0 and valid(sp) and not s.orr.tok.has(sp) and s.orr.perm != sp:
+			r.append(sp)
+	return r
+
+func mission_img(m: int) -> String:
+	return "res://assets/res/missions/m%02d.jpg" % m
+
+func place_token(i: int, sp: String, col: String) -> void:
+	s.orr.tok[sp] = col
+	s.orr.sup[col] -= 1
+	log_msg("%s colloca %s a %s." % [cname(i), ("un volantino" if col == "V" else "una telescrivente " + BOData.TEL_NAMES[col]), spname(sp)])
+	if col != "V" and s.orr.act[col] < 0:
+		await reveal_mission(col)
+	upd()
+
+func reveal_mission(col: String) -> void:
+	if s.orr.mdeck.is_empty() and s.orr.mdisc.size() > 0:
+		s.orr.mdeck = s.orr.mdisc.duplicate()
+		s.orr.mdisc.clear()
+		shuffle(s.orr.mdeck)
+	if s.orr.mdeck.is_empty():
+		return
+	var m: int = s.orr.mdeck.pop_front()
+	s.orr.act[col] = m
+	log_msg("Nuova missione (%s): %s." % [BOData.TEL_NAMES[col], BOData.MISSIONS[m].name])
+	upd()
+	await ch.notify("Nuova missione – telescrivente %s" % BOData.TEL_NAMES[col], {"img": mission_img(m), "text": BOData.MISSIONS[m].req})
+
+func discard_mission(col: String, reason: String) -> void:
+	var m: int = s.orr.act[col]
+	if m < 0:
+		return
+	s.orr.mdisc.append(m)
+	s.orr.act[col] = -1
+	var c: int = s.orr.comb[col]
+	if c >= 0:
+		var k: int = P(c).items.find("COMB")
+		if k >= 0:
+			P(c).items.remove_at(k)
+		s.orr.comb_sup += 1
+		s.orr.comb[col] = -1
+	log_msg("La missione %s viene scartata (%s)." % [BOData.MISSIONS[m].name, reason])
+
+func comb_carrier_for(key: String) -> int:
+	for col in BOData.TEL_COLORS:
+		var m: int = s.orr.act[col]
+		if m >= 0 and BOData.MISSIONS[m].k == key:
+			return s.orr.comb[col]
+	return -1
+
+## Un Combattente della Resistenza viene scartato dalla scheda di i.
+func comb_lost(i: int) -> void:
+	s.orr.comb_sup += 1
+	for col in BOData.TEL_COLORS:
+		if s.orr.comb[col] == i:
+			s.orr.comb[col] = -1
+			discard_mission(col, "il Combattente della Resistenza è stato perso")
+			if tels_of(col).size() > 0:
+				s.orr.pending.append(["reveal", col])
+			return
+
+func or_on_arrest(i: int) -> void:
+	for col in BOData.TEL_COLORS:
+		var m: int = s.orr.act[col]
+		if m < 0:
+			continue
+		match BOData.MISSIONS[m].k:
+			"goebbels":
+				var g: String = s.leaders.GOEBBELS
+				if g != "" and P(i).space in nearest_consp_spaces(g, false):
+					s.orr.pending.append(["done", col, i])
+			"tieni_duro":
+				s.orr.flagged[str(i)] = true
+
+func or_on_release(i: int) -> void:
+	if not s.orr.flagged.has(str(i)):
+		return
+	s.orr.flagged.erase(str(i))
+	for col in BOData.TEL_COLORS:
+		var m: int = s.orr.act[col]
+		if m >= 0 and BOData.MISSIONS[m].k == "tieni_duro":
+			s.orr.pending.append(["done", col, i])
+
+func or_on_raid() -> void:
+	for col in BOData.TEL_COLORS:
+		if s.orr.act[col] >= 0 and s.orr.comb[col] >= 0:
+			discard_mission(col, "il Raid della Gestapo ha sorpreso il Combattente della Resistenza")
+
+func v_count(f: Callable) -> int:
+	var n := 0
+	for sp in s.orr.tok:
+		if s.orr.tok[sp] == "V" and f.call(sp):
+			n += 1
+	return n
+
+func illegal_count(j: int) -> int:
+	var n := 0
+	for c in P(j).dossier:
+		if is_illegal(c):
+			n += 1
+	return n
+
+## Controlla le missioni che si completano da sole e quelle in sospeso.
+func check_missions() -> void:
+	if s.orr.checking or s.over:
+		return
+	s.orr.checking = true
+	var guard := 0
+	while not s.over and guard < 10:
+		guard += 1
+		var found := false
+		while s.orr.pending.size() > 0:
+			var pd: Array = s.orr.pending.pop_front()
+			if pd[0] == "reveal":
+				if s.orr.act[pd[1]] < 0:
+					await reveal_mission(pd[1])
+			elif s.orr.act[pd[1]] >= 0:
+				await complete_mission(pd[1], pd[2])
+				found = true
+		for col in BOData.TEL_COLORS:
+			var m: int = s.orr.act[col]
+			if m < 0:
+				continue
+			var md = BOData.MISSIONS[m]
+			var who := -1
+			match md.k:
+				"contromessaggio":
+					if v_count(func(sp): return leaders_in(sp).size() > 0) >= 3:
+						who = s.active
+				"arresto_gestapo", "arresto_dh":
+					for j in free_list():
+						if P(j).space == md.sp and P(j).susp == 0:
+							who = j
+							break
+				"promuovi_berlino":
+					if v_count(func(sp): return is_berlin(sp)) >= np():
+						who = s.active
+				"promuovi_23":
+					if v_count(func(sp): return sp_stage(sp) == 2 or sp_stage(sp) == 3) >= np():
+						who = s.active
+				"dodd":
+					var fl := free_list()
+					if fl.size() > 0 and fl.all(func(j): return illegal_count(j) >= 2):
+						who = s.active
+				"fuggitivi":
+					for j in free_list():
+						if "FIRMA" in P(j).items and "CRED" in P(j).items:
+							who = j
+							break
+				"confine", "cielo", "piani":
+					var c: int = s.orr.comb[col]
+					if c >= 0 and not P(c).prison and P(c).space in md.to and not kk_blocked(P(c).space):
+						var k: int = P(c).items.find("COMB")
+						if k >= 0:
+							P(c).items.remove_at(k)
+						s.orr.comb_sup += 1
+						s.orr.comb[col] = -1
+						log_msg("%s consegna il Combattente della Resistenza a %s." % [cname(c), spname(P(c).space)])
+						who = c
+			if who >= 0:
+				await complete_mission(col, who)
+				found = true
+				break
+		if not found:
+			break
+	s.orr.checking = false
+
+func complete_mission(col: String, who: int) -> void:
+	var m: int = s.orr.act[col]
+	if m < 0:
+		return
+	var md = BOData.MISSIONS[m]
+	s.orr.done.append(m)
+	s.orr.act[col] = -1
+	s.orr.comb[col] = -1
+	for sp in tels_of(col):
+		s.orr.tok.erase(sp)
+	s.orr.sup[col] = 2
+	log_msg("✔ MISSIONE COMPLETATA: %s (%s). Tutti i futuri complotti hanno +1 dado." % [md.name, cname(who)])
+	upd()
+	await ch.notify("Missione completata: " + md.name, {"img": mission_img(m), "text": "Ricompensa: " + md.rew})
+	match md.k:
+		"contromessaggio":
+			s.orr.no_pen = who
+		"arresto_gestapo", "arresto_dh":
+			if not P(who).prison and dice_available() > 0:
+				await conspire_roll(who, mini(3, dice_available()))
+		"intercetta_hess", "intercetta_himmler", "prove_fort", "prove_st4":
+			give_prove(who)
+		"goebbels":
+			for j in free_list():
+				if j != who:
+					set_susp(j, 0)
+		"inventario":
+			for sp in s.board_items.keys():
+				if sp_stage(sp) <= s.stage:
+					while unrevealed_idx(sp) >= 0 and not s.over:
+						await reveal_tile(sp, unrevealed_idx(sp), -1)
+		"segreti":
+			add_mot(who, 1)
+			var deps := all_deputies()
+			if deps.size() > 0:
+				var o: Array = []
+				for d in deps:
+					o.append({"label": "%s (a %s)" % [BOData.LEADER_NAMES[d], spname(s.leaders[d])], "img": "res://assets/leaders/%s.png" % d})
+				var d: String = deps[await ch.choose(who, "Proteggere i Segreti: quale delegato muovi (fino a 3 caselle)?", o)]
+				var dest = await ch.choose_space(who, "Dove muovere %s?" % BOData.LEADER_NAMES[d], within_any(s.leaders[d], 3), false)
+				move_leader(d, dest)
+		"autorizzazione":
+			s.orr.skip_raid += 1
+		"conversazione":
+			s.orr.dossier_bonus += 1
+		"falsario":
+			for j in free_list():
+				if s.cdeck.is_empty():
+					break
+				var k = await ch.choose(j, "Esperto Falsario: %s sceglie 1 carta dal mazzo cospiratore." % cname(j), card_opts(s.cdeck))
+				P(j).dossier.append(s.cdeck[k])
+				log_msg("%s prende %s dal mazzo." % [cname(j), cardname(s.cdeck[k])])
+				s.cdeck.remove_at(k)
+			shuffle(s.cdeck)
+		"promuovi_berlino":
+			for j in free_list():
+				if is_berlin(P(j).space):
+					add_mot(j, 2)
+		"promuovi_23":
+			for j in free_list():
+				if sp_stage(P(j).space) == 2 or sp_stage(P(j).space) == 3:
+					add_mot(j, 2)
+		"informare":
+			add_ms(-2)
+		"stalin":
+			add_ms(-1)
+		"cielo", "piani":
+			add_susp(who, -2)
+		"tieni_duro":
+			set_susp(who, 0)
+			await take_from_item_discard(who)
+		"dodd":
+			for j in free_list():
+				add_susp(j, -2)
+		"bormann":
+			if s.leaders.BORMANN != "":
+				s.leaders.BORMANN = ""
+				log_msg("Martin Bormann viene rimosso dal gioco.")
+		"reclutamento":
+			if s.stage < 7:
+				s.orr.perm = "WOLFSSCHANZE"
+				log_msg("La telescrivente permanente viene collocata su Wolfsschanze.")
+		"fuggitivi":
+			s.orr.hideout_have = true
+			await place_hideout(who)
+		"lista":
+			add_mot(who, 1)
+			var dest = await ch.choose_space(who, "Lista dei Cospiratori: dove muovere Hitler (fino a 3 caselle)?", within_any(hitler(), 3), false)
+			move_leader("HITLER", dest)
+		"riunione":
+			await take_from_item_discard(who)
+			s.turn.free_transfer = true
+			log_msg("Riunione Segreta: fino alla fine del turno i trasferimenti sono gratuiti.")
+	upd()
+
+func within_any(sp: String, n: int) -> Array:
+	var dd := dists_from(sp)
+	var r: Array = []
+	for k in dd:
+		if k != sp and dd[k] <= n:
+			r.append(k)
+	return r
+
+func give_prove(who: int) -> void:
+	if s.orr.prove <= 0:
+		log_msg("Non ci sono più oggetti Prove disponibili.")
+		return
+	s.orr.prove -= 1
+	P(who).items.append("PROVE")
+	log_msg("%s prende un oggetto Prove." % cname(who))
+
+func take_from_item_discard(who: int) -> void:
+	if s.item_discard.is_empty():
+		return
+	var k = await ch.choose(who, "Scegli 1 oggetto dalla pila degli scarti", item_opts(s.item_discard))
+	var it = s.item_discard[k]
+	s.item_discard.remove_at(k)
+	P(who).items.append(it)
+	log_msg("%s prende %s dagli scarti." % [cname(who), BOData.ITEM_NAMES[it]])
+
+func all_illegal_cards() -> Array:
+	var r: Array = []
+	for j in range(np()):
+		for c in P(j).dossier:
+			if is_illegal(c):
+				r.append(c)
+	return r
+
+func place_hideout(who: int) -> void:
+	var ill := all_illegal_cards()
+	if ill.is_empty():
+		log_msg("Il segnalino nascondiglio verrà collocato quando ci sarà una carta illegale.")
+		return
+	var k = await ch.choose(who, "Nascondere i Fuggitivi: su quale carta illegale collochi il nascondiglio?", card_opts(ill))
+	s.orr.hideout = ill[k]
+	log_msg("Il nascondiglio protegge %s durante i Raid." % cardname(ill[k]))
+
+func mission_actions(i: int) -> Array:
+	var r: Array = []
+	var sp: String = P(i).space
+	var blocked := kk_blocked(sp)
+	var fort: bool = BOData.SPACES[sp].fort
+	for col in BOData.TEL_COLORS:
+		var m: int = s.orr.act[col]
+		if m < 0:
+			continue
+		var md = BOData.MISSIONS[m]
+		var ok := false
+		var cost := 0
+		match md.k:
+			"inventario":
+				ok = fort and item_sources(i, "ANY", false, false).size() >= 2
+			"segreti":
+				ok = fort and leaders_in(sp).any(func(l): return l != "HITLER") and item_sources(i, "ESPL", false, false).size() > 0
+			"autorizzazione":
+				ok = sp == "GESTAPO" and item_sources(i, "FIRMA", false, false).size() > 0
+			"falsario":
+				ok = sp == "ZURIGO" and P(i).dossier.size() >= 3
+			"informare":
+				ok = sp == "STOCCOLMA" and item_sources(i, "ANY", false, false).size() > 0
+			"stalin":
+				ok = sp == "VARSAVIA" and not leaders_in(sp).any(func(l): return l != "HITLER") and item_sources(i, "INFO", false, false).size() > 0
+			"lista":
+				ok = sp == hitler() and item_sources(i, "ESPL", false, false).size() > 0
+			"riunione":
+				ok = free_list().all(func(j): return P(j).space == sp)
+			"intercetta_hess", "intercetta_himmler":
+				ok = s.leaders[md.leader] == sp
+				cost = 1
+			"prove_fort":
+				ok = fort
+				cost = 1
+			"prove_st4":
+				ok = sp_stage(sp) == 4
+				cost = 1
+			"conversazione":
+				ok = is_berlin(sp)
+				cost = 1
+			"bormann":
+				var b: String = s.leaders.BORMANN
+				ok = b != "" and ((s.orr.tok.has(b) and s.orr.tok[b] != "V") or s.orr.perm == b)
+				cost = 1
+			"reclutamento":
+				ok = sp == "WOLFSSCHANZE" and P(i).items.size() > 0
+				cost = 1
+			"goebbels":
+				var g: String = s.leaders.GOEBBELS
+				if g != "" and sp in nearest_consp_spaces(g, false):
+					r.append({"id": "exp", "key": "goebbels_arrest", "col": col, "cost": 1, "label": "Missione «%s»: fatti arrestare" % md.name})
+			"confine", "cielo", "piani":
+				if s.orr.comb[col] < 0 and sp == md.from and s.orr.comb_sup > 0 and not blocked:
+					r.append({"id": "exp", "key": "comb_take", "col": col, "cost": 0, "label": "Missione «%s»: prendi il Combattente (+2 sospetto)" % md.name})
+		if ok and not (blocked and md.k != "bormann"):
+			r.append({"id": "exp", "key": "mission", "col": col, "cost": cost, "label": ("Missione: " if cost == 0 else "Missione (1 azione): ") + md.name})
+	return r
+
+func do_mission(i: int, col: String) -> bool:
+	var m: int = s.orr.act[col]
+	if m < 0:
+		return false
+	var md = BOData.MISSIONS[m]
+	match md.k:
+		"inventario":
+			for n in range(2):
+				var src := item_sources(i, "ANY", false, false)
+				var k = await ch.choose(i, "Inventario Aggiornato: scegli l'oggetto da scartare (%d di 2)" % (n + 1), src)
+				use_source(src[k])
+		"segreti", "lista":
+			var src := item_sources(i, "ESPL", false, false)
+			use_source(src[0])
+		"autorizzazione":
+			use_source(item_sources(i, "FIRMA", false, false)[0])
+		"stalin":
+			use_source(item_sources(i, "INFO", false, false)[0])
+		"informare":
+			var src := item_sources(i, "ANY", false, false)
+			var k = await ch.choose(i, "Informare gli Alleati: quale oggetto scarti a Stoccolma?", src, {"cancel": true})
+			if k < 0:
+				return false
+			use_source(src[k])
+		"falsario":
+			await discard_cards_of(i, i, 3)
+		"riunione":
+			for j in free_list():
+				add_susp(j, 1)
+		"intercetta_hess", "intercetta_himmler", "prove_fort", "prove_st4":
+			var r := roll_by(i, 3)
+			await ch.notify("Missione: " + md.name, {"dice": r, "text": "Servono 2 o più simboli uguali (non aquila)."})
+			var ok := false
+			for f in ["1", "2", "3", "T"]:
+				if r.count(f) >= 2:
+					ok = true
+			if not ok:
+				log_msg("Tentativo fallito per la missione %s (%s)." % [md.name, dice_txt(r)])
+				return true
+		"conversazione":
+			var n := 0
+			for j in free_list():
+				n += P(j).dossier.size()
+			var r := roll_by(i, n)
+			await ch.notify("Missione: " + md.name, {"dice": r, "text": "Nessuna aquila = successo."})
+			if "E" in r:
+				log_msg("Tentativo fallito per la missione %s." % md.name)
+				return true
+		"bormann":
+			var n: int = placed_tels().size() + (1 if s.orr.perm != "" else 0)
+			var r := roll_by(i, n)
+			await ch.notify("Missione: " + md.name, {"dice": r, "text": "Servono 2 o più ⊕."})
+			if r.count("T") < 2:
+				log_msg("Tentativo fallito per la missione %s." % md.name)
+				return true
+		"reclutamento":
+			var r := roll_by(i, P(i).items.size())
+			await ch.notify("Missione: " + md.name, {"dice": r, "text": "Serve almeno 1 ⊕."})
+			if r.count("T") < 1:
+				log_msg("Tentativo fallito per la missione %s." % md.name)
+				return true
+	await complete_mission(col, i)
+	return true
+
+# ---------------------------------------------------------------------
+# Horst Kopkow
+# ---------------------------------------------------------------------
+func kk_blocked(sp: String) -> bool:
+	return s.mods.kk and s.kk.pos != "" and s.kk.pos == sp
+
+func kk_no_conspire() -> bool:
+	return s.mods.kk and (s.kk.nocons_until >= 0 or s.kk.nocons_stage > 0)
+
+func kopkow_move_to(sp: String) -> void:
+	var from: String = s.kk.pos
+	s.kk.pos = sp
+	moved.emit("KOPKOW", from if from != "" else sp, sp)
+	log_msg("Horst Kopkow si sposta a %s." % spname(sp))
+	upd()
+
+func enc_img(e: int) -> String:
+	return "res://assets/res/enc/n%02d.jpg" % e
+
+func enc_reshuffle_bottom() -> void:
+	if s.kk.edisc.is_empty():
+		log_msg("Non ci sono carte incontro scartate.")
+		return
+	var c: int = s.kk.edisc.pop_front()
+	s.kk.edeck.append(c)
+	shuffle(s.kk.edeck)
+	log_msg("Una carta incontro scartata viene rimescolata nel mazzo incontro (%d carte)." % s.kk.edeck.size())
+
+func kopkow_target() -> String:
+	var fl := free_list()
+	if fl.is_empty():
+		return ""
+	var mx := -1
+	for j in fl:
+		mx = maxi(mx, P(j).susp)
+	var cands: Array = fl.filter(func(j): return P(j).susp == mx)
+	for j in cands:
+		if P(j).space == s.kk.pos:
+			return s.kk.pos
+	var dd := dists_from(s.kk.pos)
+	var best := 999
+	var sps: Array = []
+	for j in cands:
+		var sp: String = P(j).space
+		if not dd.has(sp):
+			continue
+		if dd[sp] < best:
+			best = dd[sp]
+			sps = [sp]
+		elif dd[sp] == best and not (sp in sps):
+			sps.append(sp)
+	if sps.is_empty():
+		return ""
+	if sps.size() == 1:
+		return sps[0]
+	return await ch.choose_space(s.active, "Horst Kopkow: verso quale cospiratore si muove?", sps, false)
+
+func kopkow_step() -> void:
+	if not s.mods.kk or s.kk.pos == "" or s.over:
+		return
+	s.phase = "kopkow"
+	var steps := 1
+	if s.current != "" and EV[s.current].get("fx", "") == "kim" and not s.ev_ignored:
+		steps = 2
+	for k in range(steps):
+		var target: String = await kopkow_target()
+		if target == "" or target == s.kk.pos:
+			break
+		var dt := dists_from(target)
+		var nxt := ""
+		for n in neighbors(s.kk.pos):
+			if dt.has(n) and dt[n] == dt[s.kk.pos] - 1:
+				nxt = n
+				break
+		if nxt == "":
+			break
+		kopkow_move_to(nxt)
+	await get_tree_wait()
+	await kopkow_encounter()
+	await enforce_limits()
+
+## Attende che l'interfaccia abbia finito le animazioni (se il chooser lo supporta).
+func get_tree_wait() -> void:
+	if ch.has_method("wait_board"):
+		await ch.wait_board()
+
+func kopkow_encounter() -> void:
+	var here := players_in(s.kk.pos)
+	if here.is_empty():
+		return
+	var mx := -1
+	for j in here:
+		mx = maxi(mx, P(j).susp)
+	if mx == 0:
+		log_msg("Horst Kopkow incontra solo cospiratori con sospetto Basso: nessun incontro.")
+		return
+	var cands: Array = here.filter(func(j): return P(j).susp == mx)
+	var j: int = cands[0]
+	if cands.size() > 1:
+		j = await pick_player(s.active, "Horst Kopkow: quale cospiratore pesca la carta incontro?", cands)
+	if s.kk.edeck.is_empty():
+		lose("Il mazzo incontro è esaurito: Horst Kopkow ha completato la sua indagine e arrestato i cospiratori.")
+		return
+	var e: int = s.kk.edeck.pop_front()
+	log_msg("🔍 Incontro con Horst Kopkow: %s pesca «%s»." % [cname(j), BOData.ENCOUNTERS[e].name])
+	await ch.notify("Incontro: " + BOData.ENCOUNTERS[e].name, {"img": enc_img(e)})
+	var keep := await resolve_encounter(j, e)
+	if not keep:
+		s.kk.edisc.append(e)
+	upd()
+
+func nearest_unrevealed(from: String) -> Array:
+	var dd := dists_from(from)
+	var lst: Array = []
+	for sp in s.board_items:
+		for x in range(s.board_items[sp].size()):
+			if not s.board_items[sp][x].rev:
+				lst.append([dd.get(sp, 99), sp])
+	lst.sort_custom(func(a, b): return a[0] < b[0])
+	return lst
+
+func remove_nearest_unrevealed(from: String, n: int) -> void:
+	for k in range(n):
+		var lst := nearest_unrevealed(from)
+		if lst.is_empty():
+			return
+		var sp: String = lst[0][1]
+		remove_tile(sp, unrevealed_idx(sp), false)
+		log_msg("Un oggetto non rivelato a %s viene rimosso dal gioco." % spname(sp))
+
+## Restituisce true se la carta resta in gioco (Fiato sul Collo).
+func resolve_encounter(j: int, e: int) -> bool:
+	var sp: String = P(j).space
+	var present := players_in(sp)
+	var solo := present.size() <= 1
+	match BOData.ENCOUNTERS[e].k:
+		"legame":
+			if solo:
+				add_susp(j, -2)
+			else:
+				for x in present:
+					add_susp(x, -1)
+		"conti":
+			add_susp(j, -1 if solo else 1)
+		"mormorii":
+			if not solo:
+				for x in present:
+					add_susp(x, 1)
+		"attenzione":
+			move_leader("HITLER", sp)
+			if not solo:
+				for l in ["HIMMLER", "GOEBBELS"]:
+					if s.leaders[l] != "":
+						move_leader(l, sp)
+		"niente":
+			if s.dissent > 0:
+				s.dissent = 0
+				log_msg("I dadi del Dissenso vengono rimossi.")
+			else:
+				var src := item_sources(j, "ANY", false, false, true)
+				if src.size() > 0:
+					var k = await ch.choose(j, "Niente da Fare: scegli 1 oggetto da perdere.", src)
+					use_source(src[k])
+		"contrattempo":
+			var nc: int = P(j).dossier.size()
+			var opt := await safe_or_risk(j, nc >= 1, nc >= 2, "Perdi 1 carta.", "Tira un dado: ⊕ = rimescoli 1 carta incontro scartata nel mazzo; altrimenti perdi 3 carte.")
+			if opt == 0:
+				await discard_cards_of(j, j, 1)
+			elif opt == 1:
+				var f := roll1_by(j)
+				await ch.notify("Corri un rischio", {"dice": [f] if f != "" else []})
+				if f == "T":
+					enc_reshuffle_bottom()
+				elif f != "":
+					await discard_cards_of(j, j, 3)
+		"attivita":
+			if P(j).susp < 3:
+				add_susp(j, 1)
+			elif P(j).dossier.size() > 0:
+				await discard_cards_of(j, j, 1)
+		"tempo":
+			var cnt := 0
+			for st in range(1, 8):
+				if s.decks[st].is_empty():
+					continue
+				if solo and cnt >= 3:
+					break
+				s.ev_removed.append(s.decks[st].pop_front())
+				cnt += 1
+			log_msg("Rimosse senza rivelarle %d carte evento (1 per mazzo)." % cnt)
+		"fallirete":
+			var opt := await safe_or_risk(j, P(j).mot > mot_floor(j), P(j).susp < 3, "−1 motivazione.", "+2 sospetto (+1 se il tuo sospetto è Alto).")
+			if opt == 0:
+				add_mot(j, -1)
+			elif opt == 1:
+				add_susp(j, 1 if P(j).susp == 2 else 2)
+		"cautela":
+			var opt := await safe_or_risk(j, true, true, "Fino al tuo prossimo turno nessun cospiratore può Cospirare.", "Tira un dado: ⊕ = rimescoli 1 carta incontro scartata nel mazzo; altrimenti nessuno può Cospirare fino al prossimo stadio.")
+			if opt == 0:
+				s.kk.nocons_until = j
+				log_msg("Eccesso di Cautela: Cospirare non disponibile fino al prossimo turno di %s." % cname(j))
+			else:
+				var f := roll1_by(j)
+				await ch.notify("Corri un rischio", {"dice": [f] if f != "" else []})
+				if f == "T":
+					enc_reshuffle_bottom()
+				elif f != "":
+					s.kk.nocons_stage = s.stage
+					log_msg("Eccesso di Cautela: Cospirare non disponibile fino al prossimo stadio.")
+		"agnello":
+			if prisoners().is_empty():
+				var oth := free_list()
+				oth.erase(j)
+				if oth.size() > 0:
+					var x: int = await pick_player(j, "Agnello Sacrificale: quale altro cospiratore va in prigione?", oth)
+					arrest(x)
+			else:
+				set_susp(j, 3)
+		"favore":
+			s.kk.favore = (s.active + 1) % np()
+			log_msg("Restituire il Favore: nel prossimo turno %s avrà solo 2 azioni e non potrà cospirare." % cname(s.kk.favore))
+			if not solo:
+				for x in present:
+					add_susp(x, 1)
+		"annullato":
+			if count_plots(j) > 0:
+				await discard_cards_of(j, j, 1, true)
+			else:
+				enc_reshuffle_bottom()
+		"inizio":
+			var n: int = P(j).dossier.size()
+			while P(j).dossier.size() > 0:
+				discard_card(j, 0)
+			gain_cards(j, n if solo else maxi(0, n - 1))
+		"scompartimento":
+			var ni: int = P(j).items.size()
+			var opt := await safe_or_risk(j, ni >= 1, true, "Perdi 2 oggetti (1 se ne hai solo 1).", "Tira un dado: aquila = vai in prigione; altrimenti nessun effetto.")
+			if opt == 0:
+				for n in range(mini(2, ni)):
+					var k = await ch.choose(j, "Scompartimento Segreto: scegli l'oggetto da perdere.", item_opts(P(j).items))
+					discard_item(j, k)
+			else:
+				var f := roll1_by(j)
+				await ch.notify("Corri un rischio", {"dice": [f] if f != "" else []})
+				if f == "E":
+					arrest(j)
+		"sventato":
+			var opt := await safe_or_risk(j, nearest_unrevealed(sp).size() > 0, true, "Rimuovi dal gioco i 2 oggetti non rivelati più vicini.", "Tira un dado: ⊕ = riveli i 2 oggetti non rivelati più vicini; altrimenti rimuovi dal gioco i 4 più vicini.")
+			if opt == 0:
+				remove_nearest_unrevealed(sp, 2)
+			else:
+				var f := roll1_by(j)
+				await ch.notify("Corri un rischio", {"dice": [f] if f != "" else []})
+				if f == "T":
+					for n in range(2):
+						var lst := nearest_unrevealed(sp)
+						if lst.is_empty():
+							break
+						await reveal_tile(lst[0][1], unrevealed_idx(lst[0][1]), -1)
+				elif f != "":
+					remove_nearest_unrevealed(sp, 4)
+		"fiato":
+			s.kk.fiato = [j] if solo else present.duplicate()
+			log_msg("Fiato sul Collo: al prossimo Raid della Gestapo chi è coinvolto finisce in prigione con sospetto Alto o Estremo.")
+			return true
+		"documenti":
+			var opt := await safe_or_risk(j, P(j).susp < 3, true, "Il tuo sospetto sale a Estremo.", "Tira un dado: aquila = vai in prigione; altrimenti nessun effetto.")
+			if opt == 0:
+				set_susp(j, 3)
+			else:
+				var f := roll1_by(j)
+				await ch.notify("Corri un rischio", {"dice": [f] if f != "" else []})
+				if f == "E":
+					arrest(j)
+	return false
+
+## Scelta «Vai sul sicuro / Corri un rischio»: restituisce 0, 1 o -1 (nessuna opzione possibile).
+func safe_or_risk(j: int, safe_ok: bool, risk_ok: bool, safe_txt: String, risk_txt: String) -> int:
+	if safe_ok and not risk_ok:
+		return 0
+	if risk_ok and not safe_ok:
+		return 1
+	if not safe_ok and not risk_ok:
+		log_msg("Nessuna opzione dell'incontro è applicabile.")
+		return -1
+	return await ch.choose(j, "%s: scegli un'opzione." % cname(j), ["VAI SUL SICURO – " + safe_txt, "CORRI UN RISCHIO – " + risk_txt])
+
+# ---------------------------------------------------------------------
+# Circolo di Kreisau
+# ---------------------------------------------------------------------
+func ally_def(k: String) -> Dictionary:
+	for a in BOData.ALLIES:
+		if a.k == k:
+			return a
+	return {}
+
+func ally_idx(k: String) -> int:
+	for x in range(BOData.ALLIES.size()):
+		if BOData.ALLIES[x].k == k:
+			return x
+	return -1
+
+func ally_img(k: String) -> String:
+	return "res://assets/res/allies/a%02d.jpg" % ally_idx(k)
+
+func ally_img_i(a: int) -> String:
+	return "res://assets/res/allies/a%02d.jpg" % a
+
+func ally_ready(k: String) -> bool:
+	if not s.mods.ck:
+		return false
+	var a := ally_idx(k)
+	for e in s.ck.circle:
+		if e.a == a and not e.used:
+			return true
+	return false
+
+func use_ally(k: String) -> void:
+	var a := ally_idx(k)
+	for e in s.ck.circle:
+		if e.a == a and not e.used:
+			e.used = true
+			log_msg("Alleato usato: %s." % BOData.ALLIES[a].name)
+			upd()
+			return
+
+func recruit(i: int) -> void:
+	if s.ck.res.is_empty():
+		return
+	var o: Array = []
+	for a in s.ck.res:
+		o.append({"label": "%s – %s" % [BOData.ALLIES[a].name, BOData.ALLIES[a].text], "img": ally_img_i(a)})
+	var k = await ch.choose(i, "Recluta un alleato dalla riserva di reclutamento", o)
+	var a: int = s.ck.res[k]
+	s.ck.res.remove_at(k)
+	if s.ck.circle.size() >= 5:
+		var o2: Array = []
+		for e in s.ck.circle:
+			o2.append({"label": BOData.ALLIES[e.a].name + (" (usato)" if e.used else ""), "img": ally_img_i(e.a)})
+		var d = await ch.choose(i, "Il Circolo è al completo: scegli un alleato reclutato da scartare", o2)
+		log_msg("%s lascia il Circolo di Kreisau." % BOData.ALLIES[s.ck.circle[d].a].name)
+		s.ck.circle.remove_at(d)
+	s.ck.circle.append({"a": a, "used": false})
+	log_msg("★ %s entra nel Circolo di Kreisau (%d alleati)." % [BOData.ALLIES[a].name, s.ck.circle.size()])
+	if s.ck.apile.size() > 0:
+		s.ck.res.append(s.ck.apile.pop_front())
+	upd()
+
+func reichwein_offer(i: int, r: Array) -> Array:
+	var k = await ch.choose(i, "Risultato: %s. Vuoi usare l'alleata Rosemarie Reichwein per girare un'aquila su un'altra faccia?" % dice_txt(r), ["No", "Sì, usa Rosemarie Reichwein"], {"dice": r})
+	if k == 0:
+		return r
+	use_ally("reichwein")
+	var faces := ["1", "2", "3", "T"]
+	var fo: Array = []
+	for f in faces:
+		fo.append(FACE_TXT[f])
+	var fc = await ch.choose(i, "Su quale faccia giri il dado?", fo, {"dice": r})
+	r[r.find("E")] = faces[fc]
+	return r
+
+func ally_actions(i: int) -> Array:
+	var r: Array = []
+	var sp: String = P(i).space
+	for e in s.ck.circle:
+		if e.used:
+			continue
+		var a = BOData.ALLIES[e.a]
+		var ok := false
+		match a.k:
+			"haubach":
+				ok = not s.turn.skip_events
+			"leber":
+				ok = free_list().any(func(j): return P(j).susp > susp_floor(j))
+			"gerstenmaier":
+				ok = free_list().any(func(j): return P(j).mot < mot_cap(j))
+			"pyorck", "einsiedel":
+				ok = true
+			"freya":
+				ok = s.board_items.keys().any(func(x): return unrevealed_idx(x) >= 0)
+			"trotha":
+				ok = s.board_items.size() > 0
+			"trott":
+				ok = (sp == "ZURIGO" or sp == "STOCCOLMA") and item_sources(i, "ANY", false, false).size() > 0
+			"peters":
+				ok = s.cdeck.size() + s.cdiscard.size() > 0
+		if ok:
+			r.append({"id": "exp", "key": "ally", "ally": a.k, "cost": 0, "label": "⚡ Alleato: %s" % a.name, "tip": a.text})
+	return r
+
+func do_ally(i: int, k: String) -> bool:
+	match k:
+		"haubach":
+			s.turn.skip_events = true
+			log_msg("Theodor Haubach: in questo turno la carta evento non viene risolta.")
+		"leber":
+			var c := free_list().filter(func(j): return P(j).susp > susp_floor(j))
+			for n in range(2):
+				if c.is_empty():
+					break
+				var j: int = await pick_player(i, "Julius Leber: −1 sospetto a quale cospiratore? (%d di 2)" % (n + 1), c)
+				add_susp(j, -1)
+				c.erase(j)
+		"gerstenmaier":
+			var c := free_list().filter(func(j): return P(j).mot < mot_cap(j))
+			for n in range(2):
+				if c.is_empty():
+					break
+				var j: int = await pick_player(i, "Eugen Gerstenmaier: +1 motivazione a quale cospiratore? (%d di 2)" % (n + 1), c)
+				add_mot(j, 1)
+				c.erase(j)
+		"pyorck":
+			var c := free_list()
+			for n in range(3):
+				if c.is_empty():
+					break
+				var o: Array = ["Basta così"]
+				for j in c:
+					o.append("Muovi %s (a %s)" % [cname(j), spname(P(j).space)])
+				var x = await ch.choose(i, "Peter Yorck: muovi fino a 3 cospiratori (%d di 3)" % (n + 1), o)
+				if x == 0:
+					break
+				var j: int = c[x - 1]
+				var t: Array = []
+				for sp in BOData.SPACES:
+					if valid_for(j, sp) and sp != P(j).space:
+						t.append(sp)
+				var dest = await ch.choose_space(i, "Dove muovere %s?" % cname(j), t, false)
+				move_consp(j, dest)
+				c.erase(j)
+		"freya":
+			var sps: Array = s.board_items.keys().filter(func(x): return unrevealed_idx(x) >= 0)
+			var sp = await ch.choose_space(i, "Freya von Moltke: in quale casella riveli gli oggetti?", sps, false)
+			while unrevealed_idx(sp) >= 0 and not s.over:
+				var x := unrevealed_idx(sp)
+				if s.board_items[sp][x].t == "RAIDT":
+					var q = await ch.choose(i, "Freya von Moltke rivela una tessera Raid della Gestapo a %s. Vuoi ignorarla?" % spname(sp), ["Sì, ignorala (viene rimossa)", "No, risolvi il Raid"], {"imgs": [item_img("RAIDT")]})
+					if q == 0:
+						remove_tile(sp, x, false)
+						log_msg("Freya von Moltke neutralizza una tessera Raid della Gestapo.")
+						continue
+				await reveal_tile(sp, x, i)
+		"trotha":
+			for n in range(2):
+				if s.board_items.is_empty():
+					break
+				var sp = await ch.choose_space(i, "Margarete von Trotha: da quale casella raccogli l'oggetto in cima? (%d di 2)" % (n + 1), s.board_items.keys(), false)
+				await take_tile(i, sp, 0, true)
+		"trott":
+			var src := item_sources(i, "ANY", false, false)
+			var x = await ch.choose(i, "Adam von Trott: quale oggetto consegni?", src)
+			use_source(src[x])
+			add_ms(-1)
+		"peters":
+			var drawn: Array = []
+			for n in range(5):
+				var c := draw_ccard()
+				if c != "":
+					drawn.append(c)
+			if drawn.is_empty():
+				return true
+			var x = await ch.choose(i, "Hans Peters: scegli la carta da conservare (le altre tornano nel mazzo)", card_opts(drawn))
+			P(i).dossier.append(drawn[x])
+			log_msg("%s conserva %s." % [cname(i), cardname(drawn[x])])
+			drawn.remove_at(x)
+			s.cdeck.append_array(drawn)
+			shuffle(s.cdeck)
+		"einsiedel":
+			gain_cards(i, 3)
+	use_ally(k)
+	return true
+
+# ---------------------------------------------------------------------
+# Azioni dell'espansione
+# ---------------------------------------------------------------------
+func exp_actions(i: int) -> Array:
+	var r: Array = []
+	var sp: String = P(i).space
+	var blocked := kk_blocked(sp)
+	if s.mods.or:
+		if BOData.SPACES[sp].deliver.size() > 0 and not s.orr.tok.has(sp) and s.orr.perm != sp and not blocked:
+			if tel_supply_colors().size() > 0 or s.orr.sup.V > 0:
+				r.append({"id": "exp", "key": "collocare", "cost": 1, "label": "Collocare telescrivente/volantino"})
+		r.append_array(mission_actions(i))
+		if s.orr.hideout_have and all_illegal_cards().size() > (1 if s.orr.hideout != "" else 0):
+			r.append({"id": "exp", "key": "hideout", "cost": 0, "label": "Sposta il nascondiglio"})
+	if s.mods.kk and s.kk.pos != "":
+		r.append({"id": "exp", "key": "diversivo", "cost": 1, "label": "Diversivo (muovi Kopkow)"})
+	if s.mods.ck and not blocked:
+		if unrevealed_idx(sp) >= 0:
+			r.append({"id": "exp", "key": "svelare", "cost": 1, "label": "Svelare (rivela entrambi gli oggetti)"})
+		if s.board_items.has(sp) and s.ck.res.size() > 0:
+			for tl in s.board_items[sp]:
+				if tl.t == "ALLEATO" and tl.rev:
+					r.append({"id": "exp", "key": "reclutare", "cost": 1, "label": "Reclutare un alleato"})
+					break
+	if s.mods.ck:
+		r.append_array(ally_actions(i))
+	return r
+
+func do_exp_action(i: int, a: Dictionary) -> bool:
+	var sp: String = P(i).space
+	match a.key:
+		"collocare":
+			var o: Array = []
+			var codes: Array = []
+			for c in tel_supply_colors():
+				o.append({"label": "Telescrivente " + BOData.TEL_NAMES[c] + (" (missione attiva)" if s.orr.act[c] >= 0 else " (rivela una missione)"), "img": "res://assets/res/tokens/%s.png" % BOData.TEL_IMG[c]})
+				codes.append(c)
+			if s.orr.sup.V > 0:
+				o.append({"label": "Volantino", "img": "res://assets/res/tokens/VOL.png"})
+				codes.append("V")
+			var k = await ch.choose(i, "Collocare: quale segnalino vuoi mettere a %s? (tiro di 1 dado: con un'aquila +1 sospetto e nessun segnalino)" % spname(sp), o, {"cancel": true})
+			if k < 0:
+				return false
+			var f := roll1_by(i)
+			await ch.notify("Collocare", {"dice": [f] if f != "" else []})
+			if f == "E":
+				add_susp(i, 1)
+				log_msg("%s non riesce a collocare il segnalino." % cname(i))
+			elif f != "":
+				await place_token(i, sp, codes[k])
+		"mission":
+			return await do_mission(i, a.col)
+		"comb_take":
+			add_susp(i, 2)
+			P(i).items.append("COMB")
+			s.orr.comb_sup -= 1
+			s.orr.comb[a.col] = i
+			log_msg("%s prende un Combattente della Resistenza a %s." % [cname(i), spname(sp)])
+		"goebbels_arrest":
+			log_msg("%s si fa arrestare per la missione Goebbels Informato." % cname(i))
+			arrest(i)
+		"hideout":
+			await place_hideout(i)
+		"diversivo":
+			var f := roll1_by(i)
+			await ch.notify("Diversivo", {"dice": [f] if f != "" else []})
+			if f == "E":
+				add_susp(i, 1)
+			elif f != "":
+				var dest = await ch.choose_space(i, "Diversivo: dove sposti Horst Kopkow (1 casella)?", neighbors(s.kk.pos), false)
+				kopkow_move_to(dest)
+		"svelare":
+			var f := roll1_by(i)
+			await ch.notify("Svelare", {"dice": [f] if f != "" else []})
+			if f == "E":
+				add_susp(i, 1)
+			elif f != "":
+				while unrevealed_idx(sp) >= 0 and not s.over:
+					await reveal_tile(sp, unrevealed_idx(sp), i)
+		"reclutare":
+			var f := roll1_by(i)
+			await ch.notify("Reclutare", {"dice": [f] if f != "" else [], "text": "Con 1, 2 o 3 il reclutamento riesce."})
+			if f in ["1", "2", "3"]:
+				for x in range(s.board_items[sp].size()):
+					if s.board_items[sp][x].t == "ALLEATO" and s.board_items[sp][x].rev:
+						remove_tile(sp, x, false)
+						break
+				await recruit(i)
+			else:
+				log_msg("%s non riesce a reclutare l'alleato." % cname(i))
+		"ally":
+			return await do_ally(i, a.ally)
+	upd()
+	return true
+
+# ---------------------------------------------------------------------
+# Eventi dell'espansione
+# ---------------------------------------------------------------------
+func resolve_exp_event(fx: String) -> void:
+	if fx == "kim":
+		log_msg("Alla fine del turno Horst Kopkow si muove fino a 2 caselle.")
+	elif fx == "msgint":
+		if s.kk.edeck.size() > 0:
+			s.kk.edisc.append(s.kk.edeck.pop_front())
+			log_msg("Viene scartata la prima carta del mazzo incontro (%d rimaste)." % s.kk.edeck.size())
+	elif fx == "allarr":
+		var o: Array = []
+		var codes: Array = []
+		for x in range(s.ck.circle.size()):
+			var e = s.ck.circle[x]
+			if not e.used:
+				o.append({"label": "Gira (usa senza effetto) %s" % BOData.ALLIES[e.a].name, "img": ally_img_i(e.a)})
+				codes.append([0, x])
+			else:
+				o.append({"label": "Rimuovi dal Circolo %s (già usato)" % BOData.ALLIES[e.a].name, "img": ally_img_i(e.a)})
+				codes.append([1, x])
+		if o.is_empty():
+			log_msg("Nessun alleato reclutato: l'evento non ha effetto.")
+			return
+		var k = await ch.choose(s.active, "Alleato Arrestato: scegli un alleato da girare oppure uno già usato da rimuovere.", o)
+		var x: int = codes[k][1]
+		if codes[k][0] == 0:
+			s.ck.circle[x].used = true
+			log_msg("%s viene girato sul lato usato." % BOData.ALLIES[s.ck.circle[x].a].name)
+		else:
+			log_msg("%s viene rimosso dal Circolo." % BOData.ALLIES[s.ck.circle[x].a].name)
+			s.ck.circle.remove_at(x)
+	elif fx.begins_with("telscop:"):
+		var l: String = fx.substr(8)
+		var lp: String = s.leaders.get(l, "")
+		var tels := placed_tels()
+		if lp == "" or tels.is_empty():
+			log_msg("Nessuna telescrivente da rimuovere.")
+			return
+		var dd := dists_from(lp)
+		var best := 999
+		var c: Array = []
+		for sp in tels:
+			var d: int = dd.get(sp, 99)
+			if d < best:
+				best = d
+				c = [sp]
+			elif d == best:
+				c.append(sp)
+		var sp: String = c[0]
+		if c.size() > 1:
+			sp = await ch.choose_space(s.active, "Quale telescrivente viene scoperta?", c, false)
+		var col: String = s.orr.tok[sp]
+		s.orr.tok.erase(sp)
+		s.orr.sup[col] += 1
+		log_msg("La telescrivente %s a %s viene scoperta e rimossa." % [BOData.TEL_NAMES[col], spname(sp)])
+		if s.orr.act[col] >= 0 and tels_of(col).is_empty() and s.orr.perm == "":
+			discard_mission(col, "tutte le telescriventi %s sono state rimosse" % BOData.TEL_NAMES[col])
+	upd()

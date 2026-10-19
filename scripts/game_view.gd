@@ -32,6 +32,7 @@ var _focus := -1          # cospiratore mostrato per esteso (-1 = attivo)
 var plot_box: RichTextLabel
 var log_panel: PanelContainer
 var stats_panel: PanelContainer
+var exp_bar: HBoxContainer
 
 func _ready() -> void:
 	theme = UI.theme()
@@ -93,6 +94,9 @@ func _build_right() -> void:
 	hb.add_child(UI.button("Scheda riassuntiva", func(): _show_aid(), 15))
 	hb.add_child(UI.button("Menu", func(): _confirm_menu(), 15))
 	right.add_child(hp)
+	exp_bar = HBoxContainer.new()
+	exp_bar.add_theme_constant_override("separation", 6)
+	right.add_child(exp_bar)
 	# cospiratori
 	player_box = VBoxContainer.new()
 	player_box.add_theme_constant_override("separation", 6)
@@ -170,6 +174,7 @@ func _refresh() -> void:
 	var mod := game.event_mod()
 	if mod != 0:
 		header_lbl.text += "\n[color=#d9b45a]Evento attuale: %s %d aquil%s nei complotti[/color]" % ["+" if mod > 0 else "ignora", absi(mod), "a" if absi(mod) == 1 else "e"]
+	_build_exp_bar()
 	_build_players()
 	board.queue_redraw()
 
@@ -502,8 +507,8 @@ func choose_action(p: int, actions: Array) -> Dictionary:
 	plot_box.add_theme_font_size_override("normal_font_size", 16 if game.np() <= 2 else 14)
 	plot_box.add_theme_font_size_override("bold_font_size", 17 if game.np() <= 2 else 15)
 	if board.item_hot.size() > 0:
-		prompt_lbl.text += " [i][color=#7fd06a]Clicca l'oggetto evidenziato per %s.[/color][/i]" % ("raccoglierlo" if game.s.board_items[board.item_hot[0]].rev else "rivelarlo")
-	var order := ["plot", "move", "collect", "reveal", "deliver", "dossier", "conspire", "release", "transfer", "card", "ability", "bolt", "end"]
+		prompt_lbl.text += " [i][color=#7fd06a]Clicca l'oggetto evidenziato per %s.[/color][/i]" % ("raccoglierlo" if game.collectable_idx(board.item_hot[0]).size() > 0 else "rivelarlo")
+	var order := ["plot", "move", "collect", "reveal", "deliver", "dossier", "conspire", "release", "transfer", "card", "ability", "exp", "bolt", "end"]
 	var sorted_a := actions.duplicate()
 	sorted_a.sort_custom(func(a, b): return order.find(a.id) < order.find(b.id))
 	for a in sorted_a:
@@ -517,6 +522,10 @@ func choose_action(p: int, actions: Array) -> Dictionary:
 			b.tooltip_text = BOData.CCARDS[game.ctype(a.cid)].text
 		elif a.id == "ability":
 			b.tooltip_text = BOData.CONSPIRATORS[game.P(p).cid].text
+		elif a.id == "exp":
+			b.tooltip_text = _exp_tip(a)
+			if a.key == "mission" or a.key == "comb_take" or a.key == "goebbels_arrest":
+				b.add_theme_stylebox_override("normal", UI.sbox(Color("3b1f17"), Color("c4483c"), 1, 5, 12))
 		elif a.id == "plot":
 			b.tooltip_text = _plot_tip(a.cid)
 		btn_flow.add_child(b)
@@ -568,6 +577,9 @@ func notify(text: String, extra: Dictionary = {}) -> void:
 	_waiting = ""
 	_close_modal()
 
+func wait_board() -> void:
+	await _wait_board()
+
 func _wait_board() -> void:
 	var guard := 0
 	while board.is_busy() and guard < 300:
@@ -603,6 +615,8 @@ func _plot_info_bb(i: int, cid: String, compact: bool = false) -> String:
 	for q in pv.opt:
 		parts.append("[color=%s]%s %s[/color]" % [ok_c if q[1] else "#8a7d6c", "✔" if q[1] else "○", q[0]])
 	t += "\nFacoltativi: " + "  ".join(parts)
+	if pv.get("notes", []).size() > 0:
+		t += "\n[color=#e8c27a]%s[/color]" % "  ·  ".join(pv.notes)
 	if pv.extra.size() > 0:
 		t += "\n[color=#a89a88]Disponibili al momento del tiro: %s[/color]" % ", ".join(pv.extra)
 	return t
@@ -915,3 +929,147 @@ func _show_end(won: bool, reason: String) -> void:
 	hb.add_child(UI.button("Menu principale", func(): quit_to_menu.emit(), 20))
 	hb.add_child(UI.button("Guarda il tabellone", func(): z.queue_free(), 20))
 	v.add_child(hb)
+
+
+# ---------------------------------------------------------------------
+# Espansione «La Resistenza»: barra di stato e pannello dettagli
+# ---------------------------------------------------------------------
+func _exp_tip(a: Dictionary) -> String:
+	match a.key:
+		"collocare":
+			return "Tira 1 dado: con un'aquila +1 sospetto e nessun segnalino. La prima telescrivente di un colore rivela una missione."
+		"mission", "comb_take", "goebbels_arrest":
+			var m: int = game.s.orr.act[a.col]
+			return "%s\nMissione: %s\nRicompensa: %s" % [BOData.MISSIONS[m].name, BOData.MISSIONS[m].req, BOData.MISSIONS[m].rew]
+		"diversivo":
+			return "Tira 1 dado: con 1, 2, 3 o ⊕ muovi Kopkow di 1 casella; con un'aquila +1 sospetto."
+		"svelare":
+			return "Tira 1 dado: con un'aquila +1 sospetto; altrimenti riveli entrambi gli oggetti della casella."
+		"reclutare":
+			return "Tira 1 dado: con 1, 2 o 3 recluti un alleato dalla riserva."
+		"ally":
+			return a.get("tip", "")
+		"hideout":
+			return "Sposta il segnalino nascondiglio su un'altra carta illegale."
+	return ""
+
+func _mini_btn(text: String, tip: String, col: Color, cb: Callable) -> Button:
+	var b := UI.button(text, cb, 14)
+	b.tooltip_text = tip
+	b.add_theme_stylebox_override("normal", UI.sbox(col.darkened(0.6), col, 1, 5, 8))
+	return b
+
+func _build_exp_bar() -> void:
+	for c in exp_bar.get_children():
+		c.queue_free()
+	var s := game.s
+	if not (s.mods.or or s.mods.kk or s.mods.ck):
+		exp_bar.visible = false
+		return
+	exp_bar.visible = true
+	if s.mods.or:
+		var parts: Array = []
+		var tip := "ORCHESTRA ROSSA – missioni attive:\n"
+		for col in BOData.TEL_COLORS:
+			var m: int = s.orr.act[col]
+			parts.append(("●" if m >= 0 else "○"))
+			tip += "• %s: %s\n" % [BOData.TEL_NAMES[col], (BOData.MISSIONS[m].name if m >= 0 else "nessuna")]
+		tip += "Missioni completate: %d (+%d dadi ai complotti)" % [s.orr.done.size(), s.orr.done.size()]
+		exp_bar.add_child(_mini_btn("📡 Missioni %s  ✔%d" % [" ".join(parts), s.orr.done.size()], tip, Color("c0392b"), func(): _show_exp_panel()))
+	if s.mods.kk:
+		var pos: String = s.kk.pos
+		var tip2 := "HORST KOPKOW\nPosizione: %s\nMazzo incontro: %d carte (scarti %d)\nSe il mazzo finisce quando bisogna pescare, la partita è persa." % [game.spname(pos) if pos != "" else "non ancora in gioco", s.kk.edeck.size(), s.kk.edisc.size()]
+		var extra := ""
+		if game.kk_no_conspire():
+			extra = "  ·  niente Cospirare"
+		exp_bar.add_child(_mini_btn("🔍 Kopkow: %s  ·  incontri %d%s" % [game.spname(pos) if pos != "" else "—", s.kk.edeck.size(), extra], tip2, Color("8e6b3a"), func(): _show_exp_panel()))
+	if s.mods.ck:
+		var n: int = s.ck.circle.size()
+		var avail := 0
+		for e in s.ck.circle:
+			if not e.used:
+				avail += 1
+		var tip3: String = "CIRCOLO DI KREISAU\n" + BOData.KREISAU_STATUS[mini(n, 5)][2] + "\nAlleati pronti: %d" % avail
+		exp_bar.add_child(_mini_btn("👥 Kreisau: %d/5 alleati (%d pronti)" % [n, avail], tip3, Color("b8862b"), func(): _show_exp_panel()))
+
+func _show_exp_panel() -> void:
+	var s := game.s
+	var z := Control.new()
+	z.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	z.mouse_filter = Control.MOUSE_FILTER_STOP
+	modal_layer.add_child(z)
+	var dim := ColorRect.new()
+	dim.color = Color(0.05, 0.035, 0.03, 0.93)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	z.add_child(dim)
+	dim.gui_input.connect(func(e): if _click(e): z.queue_free())
+	var sc := ScrollContainer.new()
+	sc.position = Vector2(60, 40)
+	sc.size = Vector2(1800, 960)
+	z.add_child(sc)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	sc.add_child(v)
+	if s.mods.or:
+		v.add_child(UI.label("Orchestra Rossa – missioni (completate: %d, +%d dadi ai complotti)" % [s.orr.done.size(), s.orr.done.size()], 26, Color("e06a5c"), "head"))
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 14)
+		for col in BOData.TEL_COLORS:
+			var vb := VBoxContainer.new()
+			var m: int = s.orr.act[col]
+			vb.add_child(UI.label("Telescrivente %s (%d sul tabellone, %d sulla plancia)" % [BOData.TEL_NAMES[col], game.tels_of(col).size(), s.orr.sup[col]], 16, UI.TEXT, "head2"))
+			if m >= 0:
+				var tr := UI.trect(game.mission_img(m), Vector2(420, 300))
+				vb.add_child(tr)
+				var who: int = game.comb_carrier_for(BOData.MISSIONS[m].k)
+				if who >= 0:
+					vb.add_child(UI.label("Combattente portato da %s" % game.cname(who), 15, UI.GOLD, "italic"))
+			else:
+				var ph := UI.label("Nessuna missione: colloca una telescrivente %s per rivelarne una." % BOData.TEL_NAMES[col], 15, UI.MUTED, "italic")
+				ph.custom_minimum_size = Vector2(420, 300)
+				ph.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				vb.add_child(ph)
+			hb.add_child(vb)
+		v.add_child(hb)
+		var info := "Volantini sulla plancia: %d  ·  Prove disponibili: %d  ·  Combattenti disponibili: %d" % [s.orr.sup.V, s.orr.prove, s.orr.comb_sup]
+		if s.orr.skip_raid > 0:
+			info += "  ·  prossimo Raid ignorato"
+		if s.orr.no_pen >= 0:
+			info += "  ·  penalità ignorate fino al turno di %s" % game.cname(s.orr.no_pen)
+		if s.orr.hideout != "":
+			info += "  ·  nascondiglio su: %s" % game.cardname(s.orr.hideout)
+		if s.orr.dossier_bonus > 0:
+			info += "  ·  Limite di Dossier +%d" % s.orr.dossier_bonus
+		v.add_child(UI.label(info, 16, UI.MUTED))
+	if s.mods.kk:
+		v.add_child(UI.label("Horst Kopkow – %s  ·  mazzo incontro %d  ·  scarti %d" % [game.spname(s.kk.pos) if s.kk.pos != "" else "non ancora in gioco", s.kk.edeck.size(), s.kk.edisc.size()], 26, Color("d0a060"), "head"))
+		var hb2 := HBoxContainer.new()
+		hb2.add_theme_constant_override("separation", 8)
+		for e in s.kk.edisc:
+			var tr := UI.trect(game.enc_img(e), Vector2(120, 168))
+			tr.tooltip_text = BOData.ENCOUNTERS[e].name
+			hb2.add_child(tr)
+		if s.kk.edisc.is_empty():
+			hb2.add_child(UI.label("Nessuna carta incontro scartata.", 15, UI.MUTED, "italic"))
+		v.add_child(hb2)
+	if s.mods.ck:
+		v.add_child(UI.label("Circolo di Kreisau – " + BOData.KREISAU_STATUS[mini(s.ck.circle.size(), 5)][2], 26, Color("e8c27a"), "head"))
+		var hb3 := HBoxContainer.new()
+		hb3.add_theme_constant_override("separation", 8)
+		for e in s.ck.circle:
+			var tr := UI.trect(game.ally_img_i(e.a), Vector2(300, 162))
+			tr.tooltip_text = BOData.ALLIES[e.a].name + (" (usato)" if e.used else " (pronto)")
+			if e.used:
+				tr.modulate = Color(0.45, 0.45, 0.45)
+			hb3.add_child(tr)
+		if s.ck.circle.is_empty():
+			hb3.add_child(UI.label("Nessun alleato reclutato: non è possibile tentare complotti.", 15, UI.MUTED, "italic"))
+		v.add_child(hb3)
+		v.add_child(UI.label("Riserva di reclutamento", 18, UI.TEXT, "head2"))
+		var hb4 := HBoxContainer.new()
+		hb4.add_theme_constant_override("separation", 8)
+		for a in s.ck.res:
+			hb4.add_child(UI.trect(game.ally_img_i(a), Vector2(300, 162)))
+		v.add_child(hb4)
+	var close := UI.accent_button("Chiudi", func(): z.queue_free(), 18)
+	v.add_child(close)

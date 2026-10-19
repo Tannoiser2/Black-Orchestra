@@ -57,6 +57,8 @@ func is_busy() -> bool:
 
 func _item_rect(sp: String) -> Rect2:
 	var c := bp(BOData.SPACES[sp].pos)
+	if game and game.s.board_items.has(sp) and game.s.board_items[sp].size() > 1:
+		return Rect2(c - Vector2(28, 26), Vector2(56, 52))
 	return Rect2(c - Vector2(23, 23), Vector2(46, 46))
 
 func _space_center(sp: String) -> Vector2:
@@ -73,7 +75,7 @@ func on_moved(token: String, from: String, to: String) -> void:
 		anim[token] = {"pos": start, "queue": [], "speed": 300.0}
 	var a: Dictionary = anim[token]
 	var pts: Array = []
-	if from != "PRISON" and to != "PRISON" and BOData.SPACES.has(from) and BOData.SPACES.has(to) and token.begins_with("P"):
+	if from != "PRISON" and to != "PRISON" and BOData.SPACES.has(from) and BOData.SPACES.has(to) and (token.begins_with("P") or token == "KOPKOW"):
 		var path := _path(from, to)
 		if path.size() >= 2 and path.size() <= 6:
 			for k in range(1, path.size() - 1):
@@ -109,6 +111,10 @@ func _path(from: String, to: String) -> Array:
 ## Posizione di riposo di un token in base allo stato attuale.
 func _token_target(token: String, sp: String = "") -> Vector2:
 	var s: Dictionary = game.s
+	if token == "KOPKOW":
+		if sp == "":
+			sp = s.kk.pos
+		return _space_center(sp) + Vector2(0, 12)
 	if token.begins_with("P"):
 		var i := int(token.substr(1))
 		if sp == "":
@@ -214,7 +220,7 @@ func _get_tooltip(at: Vector2) -> String:
 	if Rect2(CONSP_SLOT.position * K, CONSP_SLOT.size * K).grow(10).has_point(at):
 		return "Mazzo cospiratore: %d carte\nScarti cospiratore: %d\nOggetti scartati: %d" % [game.s.cdeck.size(), game.s.cdiscard.size(), game.s.item_discard.size()]
 	if game.s.key != "" and Rect2(KEY_RECT.position * K, KEY_RECT.size * K).has_point(at):
-		return "Evento chiave: %s (clicca per ingrandire)" % BOData.EVENTS[game.s.key].name
+		return "Evento chiave: %s (clicca per ingrandire)" % game.EV[game.s.key].name
 	if sp == "":
 		return ""
 	var d = BOData.SPACES[sp]
@@ -257,10 +263,19 @@ func _get_tooltip(at: Vector2) -> String:
 		var eff := "-%d sospetto (solo tu)" % dv[1] if dv[0] == "solo" else "-%d sospetto (distribuito)" % dv[1]
 		lines.append("Consegna: %s%s per %s" % [cond, eff, it])
 		if game.s.board_items.has(sp):
-			var bi = game.s.board_items[sp]
-			lines.append("Oggetto sulla casella: " + (BOData.ITEM_NAMES[bi.t] if bi.rev else "coperto"))
+			var names: Array = []
+			for bi in game.s.board_items[sp]:
+				names.append(BOData.ITEM_NAMES[bi.t] if bi.rev else "coperto")
+			lines.append("Oggetti sulla casella: " + ", ".join(names))
 		else:
-			lines.append("Oggetto rimosso: consegna possibile.")
+			lines.append("Oggetti rimossi: consegna possibile.")
+	if game.s.mods.or and game.s.orr.tok.has(sp):
+		var col: String = game.s.orr.tok[sp]
+		lines.append("Segnalino: " + ("volantino" if col == "V" else "telescrivente " + BOData.TEL_NAMES[col]))
+	if game.s.mods.or and game.s.orr.perm == sp:
+		lines.append("Telescrivente permanente")
+	if game.kk_blocked(sp):
+		lines.append("HORST KOPKOW: casella bloccata (niente oggetti, consegne o azioni della casella)")
 	var who: Array = []
 	for l in game.leaders_in(sp):
 		who.append(BOData.LEADER_NAMES[l])
@@ -302,14 +317,20 @@ func _draw() -> void:
 		draw_arc(c, 42, 0, TAU, 48, Color(1, 0.8, 0.2, a), 4.0, true)
 	if hover != "" and (hover in highlights or hover in soft):
 		draw_arc(bp(BOData.SPACES[hover].pos), 44, 0, TAU, 48, Color.WHITE, 3.0, true)
-	# oggetti
+	# oggetti (pile di 1 o 2 tessere)
 	for sp in s.board_items:
-		var bi = s.board_items[sp]
 		var c := bp(BOData.SPACES[sp].pos)
-		var p := "res://assets/items/%s.png" % (bi.t if bi.rev else "BACK")
-		var r := Rect2(c - Vector2(23, 23), Vector2(46, 46))
-		draw_rect(Rect2(r.position + Vector2(2, 3), r.size), Color(0, 0, 0, 0.5))
-		draw_texture_rect(UI.tex(p), r, false)
+		var arr: Array = s.board_items[sp]
+		var nn := arr.size()
+		for x in range(nn - 1, -1, -1):
+			var bi = arr[x]
+			var off := Vector2.ZERO if nn == 1 else Vector2(-8 + x * 16, -6 + x * 12)
+			var sz := 46.0 if nn == 1 else 38.0
+			var p := "res://assets/items/%s.png" % (bi.t if bi.rev else "BACK")
+			var rr := Rect2(c + off - Vector2(sz / 2, sz / 2), Vector2(sz, sz))
+			draw_rect(Rect2(rr.position + Vector2(2, 3), rr.size), Color(0, 0, 0, 0.5))
+			draw_texture_rect(UI.tex(p), rr, false)
+		var r := _item_rect(sp)
 		if sp in item_hot:
 			var a := 0.6 + 0.4 * sin(t * 6.0)
 			draw_rect(r.grow(3), Color(0.35, 1.0, 0.45, a), false, 3)
@@ -331,6 +352,16 @@ func _draw() -> void:
 			draw_line(c + Vector2(-14, 14), c + Vector2(14, -14), UI.RED, 4)
 		elif k < s.dissent:
 			draw_texture_rect(UI.tex(UI.face_path("T")), Rect2(c - Vector2(18, 18), Vector2(36, 36)), false)
+	# segnalini dell'Orchestra Rossa
+	if s.mods.or:
+		for sp in s.orr.tok:
+			var c := bp(BOData.SPACES[sp].pos) + Vector2(31, 16)
+			draw_circle(c + Vector2(1, 2), 14, Color(0, 0, 0, 0.5))
+			draw_texture_rect(UI.tex("res://assets/res/tokens/%s.png" % BOData.TEL_IMG[s.orr.tok[sp]]), Rect2(c - Vector2(14, 14), Vector2(28, 28)), false)
+		if s.orr.perm != "":
+			var c := bp(BOData.SPACES[s.orr.perm].pos) + Vector2(-31, 16)
+			draw_circle(c + Vector2(1, 2), 14, Color(0, 0, 0, 0.5))
+			draw_texture_rect(UI.tex("res://assets/res/tokens/TEL_P.png"), Rect2(c - Vector2(14, 14), Vector2(28, 28)), false)
 	# evento attuale
 	if s.current != "":
 		var r := Rect2(EVENT_RECT.position * K, EVENT_RECT.size * K)
@@ -361,6 +392,16 @@ func _draw() -> void:
 			draw_rect(r.grow(3 + 2 * sin(t * 6.0)), Color(0.9, 0.15, 0.1, 0.8), false, 3)
 		draw_rect(Rect2(r.position + Vector2(2, 2), r.size), Color(0, 0, 0, 0.55))
 		draw_texture_rect(UI.tex("res://assets/leaders/%s.png" % l), r, false)
+	# Horst Kopkow
+	if s.mods.kk and s.kk.pos != "":
+		var c := _token_pos("KOPKOW")
+		var mv := _is_moving("KOPKOW")
+		var sz := Vector2(74, 31) * (1.25 if mv else 1.0)
+		var r := Rect2(c - sz / 2, sz)
+		if mv:
+			draw_rect(r.grow(5), Color(1, 0.85, 0.3, 0.55))
+		draw_rect(Rect2(r.position + Vector2(2, 3), r.size), Color(0, 0, 0, 0.6))
+		draw_texture_rect(UI.tex("res://assets/res/tokens/KOPKOW.png"), r, false)
 	# pedine con il volto del cospiratore
 	var porder: Array = []
 	for i in range(game.np()):

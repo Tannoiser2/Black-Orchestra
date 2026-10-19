@@ -9,7 +9,7 @@ var n_consp := 2
 var n_btns: Array = []
 var title_lbl: Label
 var diff := 1
-var variants := {"urgency": false, "no_docs": false, "promo_plot": true}
+var variants := {"urgency": false, "no_docs": false, "promo_plot": true, "mod_or": false, "mod_kk": false, "mod_ck": false}
 var preview: TextureRect
 var preview_txt: RichTextLabel
 var start_btn: Button
@@ -168,29 +168,29 @@ func show_setup() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	screen.add_child(title)
 	var grid := GridContainer.new()
-	grid.columns = 9
-	grid.position = Vector2(40, 96)
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.columns = 12
+	grid.position = Vector2(26, 88)
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
 	screen.add_child(grid)
 	for k in range(BOData.CONSPIRATORS.size()):
 		grid.add_child(_consp_card(k))
 	# anteprima
-	preview = UI.trect("res://assets/sheets/s00.jpg", Vector2(640, 468))
-	preview.position = Vector2(40, 590)
-	preview.size = Vector2(640, 468)
+	preview = UI.trect("res://assets/sheets/s00.jpg", Vector2(600, 440))
+	preview.position = Vector2(30, 500)
+	preview.size = Vector2(600, 440)
 	screen.add_child(preview)
 	var right := VBoxContainer.new()
-	right.position = Vector2(720, 584)
-	right.size = Vector2(1160, 470)
-	right.add_theme_constant_override("separation", 7)
+	right.position = Vector2(660, 486)
+	right.size = Vector2(1230, 580)
+	right.add_theme_constant_override("separation", 5)
 	screen.add_child(right)
 	preview_txt = RichTextLabel.new()
 	preview_txt.bbcode_enabled = true
 	preview_txt.fit_content = true
 	preview_txt.scroll_active = false
-	preview_txt.add_theme_font_size_override("normal_font_size", 20)
-	preview_txt.add_theme_font_size_override("bold_font_size", 20)
+	preview_txt.add_theme_font_size_override("normal_font_size", 18)
+	preview_txt.add_theme_font_size_override("bold_font_size", 18)
 	right.add_child(preview_txt)
 	_preview(0)
 	right.add_child(UI.label("Numero di cospiratori (2 = solitario; da 3 a 5 si gioca a turno sullo stesso computer)", 20, UI.GOLD, "head"))
@@ -222,6 +222,13 @@ func show_setup() -> void:
 	right.add_child(_check("Senso di Urgenza – scarta 1 carta aggiuntiva da ogni mazzo evento", "urgency"))
 	right.add_child(_check("Documenti Sorvegliati – rimuovi «Documenti Compromettenti» (e scarta 1 sola carta dello Stadio 7)", "no_docs"))
 	right.add_child(_check("Includi il complotto promo «P – Trasmissione della Resistenza»", "promo_plot"))
+	right.add_child(UI.label("Moduli dell'espansione «La Resistenza» (combinabili)", 20, UI.GOLD, "head"))
+	var mh := HBoxContainer.new()
+	mh.add_theme_constant_override("separation", 22)
+	mh.add_child(_check("Orchestra Rossa (missioni, più facile)", "mod_or"))
+	mh.add_child(_check("Horst Kopkow (indagine, più difficile)", "mod_kk"))
+	mh.add_child(_check("Circolo di Kreisau (alleati)", "mod_ck"))
+	right.add_child(mh)
 	var bh := HBoxContainer.new()
 	bh.add_theme_constant_override("separation", 14)
 	var bk := UI.button("← Indietro", show_menu, 20)
@@ -241,7 +248,7 @@ func _check(text: String, key: String) -> CheckBox:
 	var c := CheckBox.new()
 	c.text = text
 	c.button_pressed = variants[key]
-	c.add_theme_font_size_override("font_size", 19)
+	c.add_theme_font_size_override("font_size", 17)
 	c.toggled.connect(func(on): variants[key] = on)
 	return c
 
@@ -253,23 +260,23 @@ func _set_diff(k: int) -> void:
 func _consp_card(k: int) -> Control:
 	var cd = BOData.CONSPIRATORS[k]
 	var pan := UI.panel(UI.PANEL, UI.BORDER, 6)
-	pan.custom_minimum_size = Vector2(194, 232)
+	pan.custom_minimum_size = Vector2(146, 190)
 	pan.mouse_filter = Control.MOUSE_FILTER_STOP
 	pan.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var v := VBoxContainer.new()
 	v.alignment = BoxContainer.ALIGNMENT_CENTER
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pan.add_child(v)
-	var tr := UI.trect("res://assets/sheets/p%02d.jpg" % k, Vector2(180, 150))
+	var tr := UI.trect("res://assets/sheets/p%02d.jpg" % k, Vector2(132, 112))
 	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(tr)
-	var n := UI.label(cd.name, 16, UI.TEXT, "head")
+	var n := UI.label(cd.name, 14, UI.TEXT, "head")
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	n.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	n.custom_minimum_size = Vector2(180, 0)
+	n.custom_minimum_size = Vector2(132, 0)
 	n.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(n)
-	var a := UI.label(cd.aff.to_upper(), 14, BOGameView.AFF_COLORS[cd.aff], "head2")
+	var a := UI.label(cd.aff.to_upper() + ("  ·  RESISTENZA" if cd.get("exp", false) else ""), 12, BOGameView.AFF_COLORS[cd.aff], "head2")
 	a.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	a.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(a)
@@ -284,7 +291,7 @@ func _consp_card(k: int) -> Control:
 func _preview(k: int) -> void:
 	var cd = BOData.CONSPIRATORS[k]
 	preview.texture = UI.tex("res://assets/sheets/s%02d.jpg" % k)
-	preview_txt.text = "[font_size=28][b][color=#d9b45a]%s[/color][/b][/font_size]  [color=#a89a88]%s – %s[/color]\n[b]Capacità (da Determinato):[/b] %s" % [cd.name, cd.aff, cd.role, cd.text]
+	preview_txt.text = "[font_size=26][b][color=#d9b45a]%s[/color][/b][/font_size]  [color=#a89a88]%s – %s%s[/color]\n[b]Capacità:[/b] %s" % [cd.name, cd.aff, cd.role, ("  ·  espansione La Resistenza" if cd.get("exp", false) else ""), cd.text]
 
 func _toggle(k: int) -> void:
 	if k in selected:
