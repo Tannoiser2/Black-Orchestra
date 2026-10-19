@@ -975,14 +975,14 @@ func _build_exp_bar() -> void:
 			parts.append(("●" if m >= 0 else "○"))
 			tip += "• %s: %s\n" % [BOData.TEL_NAMES[col], (BOData.MISSIONS[m].name if m >= 0 else "nessuna")]
 		tip += "Missioni completate: %d (+%d dadi ai complotti)" % [s.orr.done.size(), s.orr.done.size()]
-		exp_bar.add_child(_mini_btn("📡 Missioni %s  ✔%d" % [" ".join(parts), s.orr.done.size()], tip, Color("c0392b"), func(): _show_exp_panel()))
+		exp_bar.add_child(_mini_btn("📡 Missioni %s  ✔%d" % [" ".join(parts), s.orr.done.size()], tip, Color("c0392b"), func(): _show_exp_panel("or")))
 	if s.mods.kk:
 		var pos: String = s.kk.pos
 		var tip2 := "HORST KOPKOW\nPosizione: %s\nMazzo incontro: %d carte (scarti %d)\nSe il mazzo finisce quando bisogna pescare, la partita è persa." % [game.spname(pos) if pos != "" else "non ancora in gioco", s.kk.edeck.size(), s.kk.edisc.size()]
 		var extra := ""
 		if game.kk_no_conspire():
 			extra = "  ·  niente Cospirare"
-		exp_bar.add_child(_mini_btn("🔍 Kopkow: %s  ·  incontri %d%s" % [game.spname(pos) if pos != "" else "—", s.kk.edeck.size(), extra], tip2, Color("8e6b3a"), func(): _show_exp_panel()))
+		exp_bar.add_child(_mini_btn("🔍 Kopkow: %s  ·  incontri %d%s" % [game.spname(pos) if pos != "" else "—", s.kk.edeck.size(), extra], tip2, Color("8e6b3a"), func(): _show_exp_panel("kk")))
 	if s.mods.ck:
 		var n: int = s.ck.circle.size()
 		var avail := 0
@@ -990,86 +990,111 @@ func _build_exp_bar() -> void:
 			if not e.used:
 				avail += 1
 		var tip3: String = "CIRCOLO DI KREISAU\n" + BOData.KREISAU_STATUS[mini(n, 5)][2] + "\nAlleati pronti: %d" % avail
-		exp_bar.add_child(_mini_btn("👥 Kreisau: %d/5 alleati (%d pronti)" % [n, avail], tip3, Color("b8862b"), func(): _show_exp_panel()))
+		exp_bar.add_child(_mini_btn("👥 Kreisau: %d/5 alleati (%d pronti)" % [n, avail], tip3, Color("b8862b"), func(): _show_exp_panel("ck")))
 
-func _show_exp_panel() -> void:
+func _show_exp_panel(which: String = "") -> void:
 	var s := game.s
+	var mods: Array = []
+	for k in ["or", "kk", "ck"]:
+		if s.mods[k]:
+			mods.append(k)
+	if mods.is_empty():
+		return
+	if which == "" or not mods.has(which):
+		which = mods[0]
 	var z := Control.new()
 	z.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	z.mouse_filter = Control.MOUSE_FILTER_STOP
 	modal_layer.add_child(z)
 	var dim := ColorRect.new()
-	dim.color = Color(0.05, 0.035, 0.03, 0.93)
+	dim.color = Color(0.05, 0.035, 0.03, 0.97)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	z.add_child(dim)
 	dim.gui_input.connect(func(e): if _click(e): z.queue_free())
-	var sc := ScrollContainer.new()
-	sc.position = Vector2(60, 40)
-	sc.size = Vector2(1800, 960)
-	z.add_child(sc)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 14)
-	sc.add_child(v)
-	if s.mods.or:
-		v.add_child(UI.label("Orchestra Rossa – missioni (completate: %d, +%d dadi ai complotti)" % [s.orr.done.size(), s.orr.done.size()], 26, Color("e06a5c"), "head"))
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 14)
-		for col in BOData.TEL_COLORS:
-			var vb := VBoxContainer.new()
-			var m: int = s.orr.act[col]
-			vb.add_child(UI.label("Telescrivente %s (%d sul tabellone, %d sulla plancia)" % [BOData.TEL_NAMES[col], game.tels_of(col).size(), s.orr.sup[col]], 16, UI.TEXT, "head2"))
-			if m >= 0:
-				var tr := UI.trect(game.mission_img(m), Vector2(420, 300))
-				vb.add_child(tr)
-				var who: int = game.comb_carrier_for(BOData.MISSIONS[m].k)
-				if who >= 0:
-					vb.add_child(UI.label("Combattente portato da %s" % game.cname(who), 15, UI.GOLD, "italic"))
-			else:
-				var ph := UI.label("Nessuna missione: colloca una telescrivente %s per rivelarne una." % BOData.TEL_NAMES[col], 15, UI.MUTED, "italic")
-				ph.custom_minimum_size = Vector2(420, 300)
-				ph.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				vb.add_child(ph)
-			hb.add_child(vb)
-		v.add_child(hb)
-		var info := "Volantini sulla plancia: %d  ·  Prove disponibili: %d  ·  Combattenti disponibili: %d" % [s.orr.sup.V, s.orr.prove, s.orr.comb_sup]
-		if s.orr.skip_raid > 0:
-			info += "  ·  prossimo Raid ignorato"
-		if s.orr.no_pen >= 0:
-			info += "  ·  penalità ignorate fino al turno di %s" % game.cname(s.orr.no_pen)
-		if s.orr.hideout != "":
-			info += "  ·  nascondiglio su: %s" % game.cardname(s.orr.hideout)
-		if s.orr.dossier_bonus > 0:
-			info += "  ·  Limite di Dossier +%d" % s.orr.dossier_bonus
-		v.add_child(UI.label(info, 16, UI.MUTED))
-	if s.mods.kk:
-		v.add_child(UI.label("Horst Kopkow – %s  ·  mazzo incontro %d  ·  scarti %d" % [game.spname(s.kk.pos) if s.kk.pos != "" else "non ancora in gioco", s.kk.edeck.size(), s.kk.edisc.size()], 26, Color("d0a060"), "head"))
-		var hb2 := HBoxContainer.new()
-		hb2.add_theme_constant_override("separation", 8)
-		for e in s.kk.edisc:
-			var tr := UI.trect(game.enc_img(e), Vector2(120, 168))
-			tr.tooltip_text = BOData.ENCOUNTERS[e].name
-			hb2.add_child(tr)
-		if s.kk.edisc.is_empty():
-			hb2.add_child(UI.label("Nessuna carta incontro scartata.", 15, UI.MUTED, "italic"))
-		v.add_child(hb2)
-	if s.mods.ck:
-		v.add_child(UI.label("Circolo di Kreisau – " + BOData.KREISAU_STATUS[mini(s.ck.circle.size(), 5)][2], 26, Color("e8c27a"), "head"))
-		var hb3 := HBoxContainer.new()
-		hb3.add_theme_constant_override("separation", 8)
-		for e in s.ck.circle:
-			var tr := UI.trect(game.ally_img_i(e.a), Vector2(300, 162))
-			tr.tooltip_text = BOData.ALLIES[e.a].name + (" (usato)" if e.used else " (pronto)")
-			if e.used:
-				tr.modulate = Color(0.45, 0.45, 0.45)
-			hb3.add_child(tr)
-		if s.ck.circle.is_empty():
-			hb3.add_child(UI.label("Nessun alleato reclutato: non è possibile tentare complotti.", 15, UI.MUTED, "italic"))
-		v.add_child(hb3)
-		v.add_child(UI.label("Riserva di reclutamento", 18, UI.TEXT, "head2"))
-		var hb4 := HBoxContainer.new()
-		hb4.add_theme_constant_override("separation", 8)
-		for a in s.ck.res:
-			hb4.add_child(UI.trect(game.ally_img_i(a), Vector2(300, 162)))
-		v.add_child(hb4)
+	# schede: una per ogni plancia attiva
+	var tabs := HBoxContainer.new()
+	tabs.position = Vector2(60, 24)
+	tabs.add_theme_constant_override("separation", 10)
+	z.add_child(tabs)
+	var titles := {"or": "📡 Plancia Resistenza (Orchestra Rossa)", "kk": "🔍 Plancia Indagine (Horst Kopkow)", "ck": "👥 Plancia Alleati (Circolo di Kreisau)"}
+	for k in mods:
+		var kk: String = k
+		var bt := UI.button(titles[k], func():
+			z.queue_free()
+			_show_exp_panel(kk), 18)
+		if k == which:
+			bt.add_theme_stylebox_override("normal", UI.sbox(UI.RED_DARK, UI.GOLD, 2))
+		tabs.add_child(bt)
 	var close := UI.accent_button("Chiudi", func(): z.queue_free(), 18)
-	v.add_child(close)
+	tabs.add_child(close)
+	var hb := HBoxContainer.new()
+	hb.position = Vector2(60, 84)
+	hb.add_theme_constant_override("separation", 30)
+	z.add_child(hb)
+	var board := BOExpBoards.new()
+	board.setup(game, which, 1180.0)
+	board.zoom_requested.connect(func(path): _zoom_image(z, path))
+	hb.add_child(board)
+	var side := VBoxContainer.new()
+	side.custom_minimum_size = Vector2(560, 0)
+	side.add_theme_constant_override("separation", 10)
+	hb.add_child(side)
+	var lines: Array = []
+	match which:
+		"or":
+			side.add_child(UI.label("Orchestra Rossa", 28, Color("e06a5c"), "head"))
+			lines.append("Missioni completate: %d → +%d dad%s a ogni tentativo di complotto." % [s.orr.done.size(), s.orr.done.size(), "o" if s.orr.done.size() == 1 else "i"])
+			for col in BOData.TEL_COLORS:
+				var m: int = s.orr.act[col]
+				lines.append("• %s: %s  (%d sul tabellone, %d sulla plancia)" % [BOData.TEL_NAMES[col], BOData.MISSIONS[m].name if m >= 0 else "nessuna missione attiva", game.tels_of(col).size(), s.orr.sup[col]])
+			lines.append("Volantini sulla plancia: %d  ·  Prove: %d  ·  Combattenti: %d" % [s.orr.sup.V, s.orr.prove, s.orr.comb_sup])
+			if s.orr.perm != "":
+				lines.append("Telescrivente permanente su: " + game.spname(s.orr.perm))
+			if s.orr.hideout != "":
+				lines.append("Nascondiglio su: " + game.cardname(s.orr.hideout))
+			if s.orr.skip_raid > 0:
+				lines.append("Il prossimo Raid della Gestapo viene ignorato.")
+			if s.orr.no_pen >= 0:
+				lines.append("Penalità ignorate fino al turno di " + game.cname(s.orr.no_pen))
+			if s.orr.dossier_bonus > 0:
+				lines.append("Limite di Dossier +%d" % s.orr.dossier_bonus)
+			lines.append("\nSopra ogni colonna c'è la missione attiva di quel colore: la prima telescrivente collocata sul tabellone la rivela, la seconda (cerchio a destra) impedisce che venga scartata.")
+		"kk":
+			side.add_child(UI.label("Horst Kopkow", 28, Color("d0a060"), "head"))
+			lines.append("Posizione: " + (game.spname(s.kk.pos) if s.kk.pos != "" else "non ancora in gioco"))
+			lines.append("Mazzo incontro: %d  ·  Scarti: %d" % [s.kk.edeck.size(), s.kk.edisc.size()])
+			lines.append("\nDopo l'evento di ogni turno Kopkow si muove di una casella verso il suo bersaglio; se termina in una casella con dei cospiratori si pesca una carta incontro. Se bisogna pescare e il mazzo è finito, la partita è persa.")
+		"ck":
+			var n: int = s.ck.circle.size()
+			side.add_child(UI.label("Circolo di Kreisau", 28, Color("e8c27a"), "head"))
+			lines.append("Alleati reclutati: %d/5" % n)
+			lines.append("Status attuale (riga evidenziata): " + BOData.KREISAU_STATUS[mini(n, 5)][2])
+			lines.append("Tessere alleato ancora da pescare: %d" % s.ck.apile.size())
+			lines.append("\nGli alleati occupano gli slot dall'alto verso il basso; vale solo lo status dello slot occupato più in basso. Un alleato in grigio è già stato usato.")
+	for ln in lines:
+		var l := UI.label(ln, 18, UI.TEXT)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size = Vector2(560, 0)
+		side.add_child(l)
+	side.add_child(UI.label("Passa il mouse sugli elementi per i dettagli; clicca su carte e tessere per ingrandirle.", 15, UI.MUTED, "italic"))
+
+func _zoom_image(parent: Control, path: String) -> void:
+	var zz := Control.new()
+	zz.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	zz.mouse_filter = Control.MOUSE_FILTER_STOP
+	parent.add_child(zz)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.75)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	zz.add_child(dim)
+	var t := UI.tex(path)
+	var sz := t.get_size()
+	var k := minf(1500.0 / sz.x, 900.0 / sz.y)
+	var tr := TextureRect.new()
+	tr.texture = t
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.size = sz * k
+	tr.position = (Vector2(1920, 1080) - sz * k) / 2
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	zz.add_child(tr)
+	dim.gui_input.connect(func(e): if _click(e): zz.queue_free())

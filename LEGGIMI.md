@@ -37,8 +37,11 @@ e i tre moduli, attivabili insieme o separatamente:
 - **Circolo di Kreisau** – 2 tessere per casella (alleati, Raid, Qualsiasi Oggetto, +1 Motivazione/−1
   Supporto), azioni *Svelare* e *Reclutare*, 15 alleati con capacità monouso, status del Circolo
   applicato ai complotti, 6 eventi *Alleato Arrestato*.
-Il pulsante con lo stato di ogni modulo (sotto l'intestazione) apre il pannello con missioni,
-carte incontro scartate e alleati.
+Il pulsante con lo stato di ogni modulo (sotto l'intestazione) apre le **plance dell'espansione**
+(Plancia Resistenza, Plancia Indagine, Plancia Alleati) con lo stato della partita sopra: missioni
+attive sopra le colonne colorate, telescriventi/volantini/Prove/Combattenti rimasti sulla plancia,
+mazzi e scarti, alleati negli slot del Circolo con evidenziata la riga di status in vigore e la
+riserva di reclutamento. Tooltip su ogni elemento, clic su carte e tessere per ingrandirle.
 
 ### Scelte di interpretazione dell'espansione
 - Con più moduli insieme, le carte evento da rimuovere si sommano (es. tutti e tre: 6 carte dagli Stadi 2-7).

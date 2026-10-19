@@ -40,6 +40,13 @@ func _initialize() -> void:
 	main._launch(g)
 	var gv = main.screen.get_child(0)
 	await shot("game", 40)
-	gv._show_exp_panel()
-	await shot("panel", 10)
+	g.s.orr.done = [3, 5]
+	g.s.orr.prove = 1
+	g.s.kk.pos = "GESTAPO"
+	g.s.kk.edisc = [0, 4, 7]
+	for k in ["or", "kk", "ck"]:
+		gv._show_exp_panel(k)
+		await shot("plancia_" + k, 10)
+		for c in gv.modal_layer.get_children():
+			c.queue_free()
 	quit()
